@@ -1,0 +1,40 @@
+#!/bin/bash
+# Beschattungswaechter - Deinstallation
+# command <ZUFALLSKENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
+#
+# LoxBerry raeumt config/, log/ und data/ des Plugins selbst weg - aber nur die
+# VERZEICHNISSE. Eine Sicherungsdatei DANEBEN bliebe liegen. Hausregel: wer
+# neben dem Ordner ablegt, um ein Upgrade zu ueberleben, raeumt beim
+# Deinstallieren selbst auf.
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-beschattungswaechter}"
+BASE="${ARGV5:-$LBHOMEDIR}"
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    SELF=$(cd "$(dirname "$0")" && pwd)
+    PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
+    BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
+fi
+ENTFERNT=0
+if [ -n "$BASE" ] && [ -f "$BASE/config/plugins/$PFOLDER.backup.json" ]; then
+    rm -f "$BASE/config/plugins/$PFOLDER.backup.json" 2>/dev/null && ENTFERNT=1
+fi
+[ -n "$BASE" ] && rm -rf "$BASE/data/plugins/$PFOLDER" 2>/dev/null
+# Rest der Fassung 0.9.0 - siehe postinstall.sh. Auch hier nur die eigene
+# Datei und das dann leere Verzeichnis, nichts Fremdes.
+ALT="$BASE/system/cron/cron.15min/$PFOLDER"
+if [ -n "$BASE" ] && [ -d "$ALT" ]; then
+    rm -f "$ALT/$PFOLDER"
+    rm -f "$ALT/cron.15min"
+    rm -f "$ALT/cron.05min"
+    rmdir "$ALT" 2>/dev/null
+fi
+if [ "$ENTFERNT" = "1" ]; then
+    echo "<OK> Beschattungswaechter entfernt, Sicherung geloescht."
+else
+    echo "<OK> Beschattungswaechter entfernt."
+fi
+echo "<INFO> ACHTUNG: ab jetzt schaltet niemand mehr die Sonnenstandsautomatik"
+echo "<INFO> ein. Nach dem morgendlichen Hochfahren der Rollladen bleibt sie"
+echo "<INFO> aus, bis jemand in der App auf das A drueckt."
+exit 0

@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# Beschattungswaechter - alle fuenf Minuten.
+#
+# Der Lauf entscheidet SELBST, ob er etwas tut: nur wenn eingeschaltet, nur im
+# Zeitfenster und nur, wenn der eingestellte Abstand vergangen ist. Deshalb
+# steht hier der kurze Takt und nicht der stuendliche - die Entscheidung
+# gehoert in das Plugin, nicht in den Cron-Ordner, sonst muesste man beim
+# Aendern des Abstands eine Datei verschieben.
+#
+# Der Platzhalter in der Zeile LAUF= wird bei der Installation durch den
+# bin-Ordner des Plugins ersetzt. Deshalb steht hier KEIN fester Systempfad
+# und auch keine Rechnung mit ".." vom eigenen Ablageort aus: LoxBerry legt
+# diese Datei drei Ebenen unter der Wurzel ab, eine solche Rechnung landete
+# daneben - und der Cron liefe still ins Leere.
+#
+# WARUM cron.05min UND NICHT cron.15min: die erste Fassung lag in cron.15min.
+# Diesen Ordner benutzt in dieser Anlage KEIN anderes Plugin - und die 0.9.0
+# hatte dort versehentlich einen Unterordner angelegt (cron/cron.15min war ein
+# Verzeichnis statt einer Datei). Beim Update lag dieser Ordner der Datei im
+# Weg, und der Cron lief eine Stunde lang nicht. cron.05min dagegen traegt in
+# dieser Anlage fuenf Plugins, die nachweislich laufen.
+LAUF="REPLACELBPBINDIR/bw_lauf.php"
+
+[ -f "$LAUF" ] || exit 0
+/usr/bin/php "$LAUF" >/dev/null 2>&1
+exit 0

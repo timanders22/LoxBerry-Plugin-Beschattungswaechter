@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
+
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Main Center Motif: Shading Window with Automatic Mode "A" Badge -->
+    <g transform="translate(256, 185)">
+      <!-- Rollladenkasten / Top Box -->
+      <rect x="-70" y="-100" width="140" height="20" rx="6" fill="#ffffff" />
+      
+      <!-- Outer Window Frame -->
+      <rect x="-64" y="-80" width="128" height="155" rx="8" fill="none" stroke="#ffffff" stroke-width="10" />
+      
+      <!-- Shading Blind / Rollladen (Half-closed top down) -->
+      <rect x="-56" y="-75" width="112" height="85" fill="#ffffff" />
+      <!-- Slats Cutout in Blinds -->
+      <line x1="-50" y1="-63" x2="50" y2="-63" stroke="#6dac20" stroke-width="4.5" stroke-linecap="round" />
+      <line x1="-50" y1="-49" x2="50" y2="-49" stroke="#6dac20" stroke-width="4.5" stroke-linecap="round" />
+      <line x1="-50" y1="-35" x2="50" y2="-35" stroke="#6dac20" stroke-width="4.5" stroke-linecap="round" />
+      <line x1="-50" y1="-21" x2="50" y2="-21" stroke="#6dac20" stroke-width="4.5" stroke-linecap="round" />
+      <!-- Heavy Bottom Bar Cutout -->
+      <rect x="-52" y="-9" width="104" height="7" rx="2" fill="#6dac20" />
+
+      <!-- Automatic "A" Badge (Der Automatik-Knopf) -->
+      <circle cx="-35" cy="40" r="26" fill="#ffffff" />
+      <circle cx="-35" cy="40" r="21" fill="#6dac20" />
+      <text x="-35" y="50" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="28">A</text>
+    </g>
+
+    <!-- Flanking Left Symbol: Sun (Sonneneinstrahlung / Helligkeit) -->
+    <g transform="translate(100, 155)">
+      <circle cx="0" cy="0" r="28" fill="#ffffff" />
+      <circle cx="0" cy="0" r="13" fill="#6dac20" />
+      <line x1="0" y1="-21" x2="0" y2="-17" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="0" y1="17" x2="0" y2="21" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="-21" y1="0" x2="-17" y2="0" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="17" y1="0" x2="21" y2="0" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="-14" y1="-14" x2="-11" y2="-11" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="11" y1="11" x2="14" y2="14" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="11" y1="-11" x2="14" y2="-14" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+      <line x1="-14" y1="14" x2="-11" y2="11" stroke="#6dac20" stroke-width="3.5" stroke-linecap="round" />
+    </g>
+
+    <!-- Flanking Right Symbol: Thermometer (Temperatur-Überwachung) -->
+    <g transform="translate(412, 155)">
+      <circle cx="0" cy="0" r="28" fill="#ffffff" />
+      <!-- Thermometer Tube Cutout -->
+      <rect x="-4" y="-15" width="8" height="18" rx="4" fill="#6dac20" />
+      <!-- Thermometer Bulb Cutout -->
+      <circle cx="0" cy="7" r="8" fill="#6dac20" />
+      <!-- Mercury Inner Fill -->
+      <circle cx="0" cy="7" r="4.5" fill="#ffffff" />
+      <rect x="-2" y="-5" width="4" height="12" rx="1" fill="#ffffff" />
+      <!-- Ticks -->
+      <line x1="4" y1="-10" x2="8" y2="-10" stroke="#6dac20" stroke-width="2" stroke-linecap="round" />
+      <line x1="4" y1="-5" x2="8" y2="-5" stroke="#6dac20" stroke-width="2" stroke-linecap="round" />
+      <line x1="4" y1="0" x2="8" y2="0" stroke="#6dac20" stroke-width="2" stroke-linecap="round" />
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="0.5">Beschattungswächter</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
+</svg>
