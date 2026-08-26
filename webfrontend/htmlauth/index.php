@@ -49,45 +49,7 @@ if ($bw_lb !== '' && is_file($bw_lb . '/libs/phplib/loxberry_system.php')) {
 }
 
 /* ---------- Sprache ------------------------------------------------------ */
-function bw_sprachdatei()
-{
-    $t = getenv('LBPTEMPLATEDIR');
-    if ($t === false || $t === '') {
-        $lb = getenv('LBHOMEDIR');
-        $kand = array();
-        if ($lb !== false && $lb !== '') {
-            $kand[] = rtrim($lb, '/\\') . '/templates/plugins/' . basename(__DIR__);
-        }
-        $kand[] = dirname(dirname(dirname(__DIR__))) . '/templates/plugins/' . basename(__DIR__);
-        $kand[] = dirname(dirname(__DIR__)) . '/templates';
-        $t = $kand[count($kand) - 1];
-        foreach ($kand as $k) {
-            if (is_dir($k . '/lang')) { $t = $k; break; }
-        }
-    }
-    $lang = 'de';
-    $g = (getenv('LBHOMEDIR') ?: '/opt/loxberry') . '/config/system/general.json';
-    if (is_file($g)) {
-        $d = json_decode((string) @file_get_contents($g), true);
-        if (isset($d['Base']['Lang']) && $d['Base']['Lang'] === 'en') { $lang = 'en'; }
-    }
-    $f = $t . '/lang/language_' . $lang . '.ini';
-    return is_file($f) ? $f : $t . '/lang/language_de.ini';
-}
 
-function bw_t($schluessel)
-{
-    static $tab = null;
-    if ($tab === null) {
-        $tab = @parse_ini_file(bw_sprachdatei(), true);
-        if (!is_array($tab)) { $tab = array(); }
-    }
-    $teil = explode('.', $schluessel, 2);
-    if (count($teil) === 2 && isset($tab[$teil[0]][$teil[1]])) {
-        return $tab[$teil[0]][$teil[1]];
-    }
-    return $schluessel;
-}
 
 function bw_e($s)
 {
@@ -148,6 +110,54 @@ $bw_rahmen = class_exists('LBWeb', false);
 if ($bw_rahmen) {
     LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_sichern'])) {
+    $bw_js = json_encode(bw_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($bw_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="beschattungswaechter_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $bw_js;
+        exit;
+    }
+    $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
+    if (!isset($_FILES['bw_sicherung']) || !is_array($_FILES['bw_sicherung'])
+        || !isset($_FILES['bw_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['bw_sicherung']['tmp_name'])) {
+        $bw_fehler[] = bw_t('TEXT.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
+        $bw_fehler[] = bw_t('TEXT.SICH_ZU_GROSS');
+    } else {
+        list($bw_neu, $bw_mangel, $bw_n) = bw_sicherung_lesen(
+            (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
+        if ($bw_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $bw_fehler[] = bw_t('TEXT.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $bw_mangel);
+        } elseif (bw_config_speichern($bw_neu)) {
+            $bw_meldungen[] = sprintf(bw_t('TEXT.SICH_UEBERNOMMEN'), $bw_n);
+        } else {
+            $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard - wortgetreu aus VORLAGE_hausstandard.css.html */
@@ -298,8 +308,27 @@ if ($bw_rahmen) {
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
 </div>
-<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span> <span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span></div>
 </form>
+
+<h2><?= bw_t('TEXT.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= bw_t('TEXT.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= bw_t('TEXT.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_t('TEXT.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="file" name="bw_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('TEXT.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================= Test ================= -->
