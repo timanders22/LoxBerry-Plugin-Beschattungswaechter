@@ -8,6 +8,23 @@
  * (c) Beschattungswaechter Plugin Authors - MIT-Lizenz
  */
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* Der Unterbau liegt im anderen Baum. Wie weit die beiden auseinander liegen,
    haengt davon ab, wie das Plugin gerade liegt - installiert drei Stufen,
    im Archiv zwei. Vorrang hat die Umgebungsvariable von LoxBerry. */
@@ -107,9 +124,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['jetzt'])) {
 $bw_stand = bw_stand_lesen();
 $bw_ms = bw_miniserver();
 $bw_rahmen = class_exists('LBWeb', false);
-if ($bw_rahmen) {
-    LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -156,6 +170,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
             $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($bw_rahmen) {
+    LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
 }
 
 ?>
