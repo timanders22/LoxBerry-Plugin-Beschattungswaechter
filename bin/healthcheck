@@ -1,0 +1,75 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Beschattungswaechter - Healthcheck fuer LoxBerry
+ *
+ * Seit LoxBerry 2.2 ruft sbin/healthcheck.pl eine ausfuehrbare Datei dieses
+ * Namens im bin-Ordner des Plugins auf - einmal mit 'title', einmal mit
+ * 'check'. Die Antwort ist JSON. plugininstall.pl setzt bin/ rekursiv auf
+ * 755; die Datei ist damit von selbst ausfuehrbar.
+ *
+ * WARUM DAS HIER ZAEHLT: am 24.08.2026 stand dieses Plugin vollstaendig
+ * installiert da, alle Selbstpruefungen gruen - und tat nichts, weil sein
+ * Cron-Eintrag an der falschen Stelle lag. Wer die Plugin-Seite nicht
+ * oeffnet, sieht ein unauffaelliges Symbol. Genau der Anwender, bei dem die
+ * Einrichtung haengt, hatte keinen Weg, es zu erfahren.
+ *
+ * Nebengewinn ohne Zusatzarbeit: healthcheck.pl veroeffentlicht das Ergebnis
+ * zusaetzlich RETAINED nach MQTT unter <rechnername>/healthcheck/<titel>
+ * sowie in die Zusammenfassung. Das Plugin bekommt damit einen zweiten Weg
+ * nach Loxone, ohne eine Zeile MQTT-Code.
+ *
+ * Die LoxBerry-Skala: leer/0 unbekannt, 3 Fehler, 4 Warnung, 5 in Ordnung,
+ * 6 Hinweis.
+ *
+ * Der Befund kommt aus DERSELBEN Funktion wie die Oberflaeche und die
+ * Benachrichtigung - bw_befund(). Drei Stellen, die dasselbe anders sagen,
+ * sind zwei zu viel.
+ */
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+
+$bw_gefunden = false;
+foreach (array(
+    dirname(__DIR__) . '/webfrontend/html/bw_lib.php',
+    dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/'
+        . basename(__DIR__) . '/bw_lib.php',
+    dirname(dirname(__DIR__)) . '/webfrontend/html/plugins/'
+        . basename(__DIR__) . '/bw_lib.php',
+) as $bw_kandidat) {
+    if (is_file($bw_kandidat)) {
+        require_once $bw_kandidat;
+        $bw_gefunden = true;
+        break;
+    }
+}
+if (!$bw_gefunden) {
+    /* Auch der Fehlerfall antwortet in der vorgesehenen Form. Ein
+       Healthcheck, der nichts ausgibt, ist von einem, der nicht laeuft,
+       nicht zu unterscheiden. */
+    echo json_encode(array(
+        'desc'   => 'Beschattungswaechter',
+        'status' => 3,
+        'result' => 'Die Bibliothek bw_lib.php wurde nicht gefunden - das Plugin '
+                  . 'ist unvollstaendig installiert.',
+    ));
+    exit(0);
+}
+
+$bw_was = isset($argv[1]) ? (string) $argv[1] : 'check';
+if ($bw_was === 'title') {
+    echo json_encode(array('desc' => 'Beschattungswaechter'));
+    exit(0);
+}
+
+/* bw_config(false): der Healthcheck legt nichts an. Er laeuft aus dem Cron
+   und aus der Systemseite - beides sind Leser, keine Einrichter. */
+list($bw_stufe, $bw_text) = bw_befund(bw_config(false));
+
+echo json_encode(array(
+    'desc'    => 'Beschattungswaechter',
+    'status'  => $bw_stufe,
+    'result'  => $bw_text,
+    'logfile' => bw_paths()['logdatei'],
+));
+exit(0);

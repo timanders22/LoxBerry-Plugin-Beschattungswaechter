@@ -2,14 +2,25 @@
 /**
  * Beschattungswaechter - der Lauf
  *
- * Wird vom Cron alle fuenfzehn Minuten aufgerufen und entscheidet selbst, ob
- * er etwas tut: nur wenn eingeschaltet, nur im Zeitfenster und nur, wenn seit
- * dem letzten Befehl der eingestellte Abstand vergangen ist.
+ * Wird vom Cron alle FUENF Minuten aufgerufen (cron/cron.05min) und
+ * entscheidet selbst, ob er etwas tut: nur wenn eingeschaltet, nur im
+ * Zeitfenster und nur, wenn seit dem letzten Befehl der eingestellte Abstand
+ * vergangen ist. Der Abstand steht in der Konfiguration und nicht im
+ * Ordnernamen des Crons - sonst muesste man beim Aendern eine Datei
+ * verschieben.
+ *
+ * (Bis 0.9.10 stand hier "alle fuenfzehn Minuten". Der Takt war seit 0.9.2
+ * ein anderer; der Satz ist nicht mitgezogen worden - und dieselbe Zahl
+ * stand noch an drei weiteren Stellen.)
+ *
+ * DAS LEBENSZEICHEN GEHT BEI JEDEM DURCHGANG HINAUS, auch wenn nichts
+ * gesendet wurde. Sonst ist ein toter Waechter von einem ruhigen Haus nicht
+ * zu unterscheiden: die virtuellen Eingaenge behalten ihren letzten Wert.
  *
  * Aufruf von Hand:
  *   php bw_lauf.php            regulaerer Lauf
  *   php bw_lauf.php --jetzt    ohne Ruecksicht auf Abstand und Fenster
- *   php bw_lauf.php --probe    sagt nur, was er taete
+ *   php bw_lauf.php --probe    sagt nur, was er taete - sendet nichts
  */
 
 $bw_lib = '';
@@ -28,7 +39,21 @@ if ($bw_lib === '') {
 }
 require_once $bw_lib;
 
+/* Ein unbekannter Schalter darf nicht ARBEITEN. Ein Tippfehler soll eine
+   Antwort ergeben und keinen Lauf - bei einem Werkzeug, das etwas an eine
+   fremde Anlage schickt, ist das nicht Kosmetik. */
 $bw_argv = isset($argv) ? $argv : array();
+$bw_bekannt = array('--jetzt', '--probe');
+foreach ($bw_argv as $bw_i => $bw_a) {
+    if ($bw_i === 0 || strncmp((string) $bw_a, '--', 2) !== 0) {
+        continue;
+    }
+    if (!in_array($bw_a, $bw_bekannt, true)) {
+        fwrite(STDERR, 'Unbekannter Schalter: ' . $bw_a . ' - bekannt sind '
+                     . implode(', ', $bw_bekannt) . "\n");
+        exit(2);
+    }
+}
 $bw_jetzt = in_array('--jetzt', $bw_argv, true);
 $bw_probe = in_array('--probe', $bw_argv, true);
 
@@ -36,9 +61,12 @@ $c = bw_config();
 $stand = bw_stand_lesen();
 $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
 $alter = $letzte > 0 ? (time() - $letzte) : PHP_INT_MAX;
+$ziele = bw_ziele($c);
 
 $grund = '';
-if (empty($c['aktiv']) && !$bw_jetzt) {
+if (!$ziele) {
+    $grund = 'kein Ziel eingerichtet';
+} elseif (empty($c['aktiv']) && !$bw_jetzt) {
     $grund = 'abgeschaltet';
 } elseif (!bw_im_fenster($c) && !$bw_jetzt) {
     $grund = 'ausserhalb des Zeitfensters ' . $c['von'] . '-' . $c['bis'];
@@ -47,37 +75,104 @@ if (empty($c['aktiv']) && !$bw_jetzt) {
                      (int) floor($alter / 60), (int) $c['abstand']);
 }
 
+if ($bw_probe) {
+    /* Der Trockenlauf laeuft durch DENSELBEN Weg - alle Wachen greifen echt,
+       nur das Senden unterbleibt. Und er uebernimmt NICHT den Wortlaut des
+       Ernstfalls: eine Probe, die "gesendet" meldet, waehrend nichts
+       gesendet wurde, ist eine stille Falschaussage. */
+    bw_trocken(true);
+    echo 'PROBE - es wird nichts gesendet.' . "\n";
+    if ($grund !== '') {
+        echo '  Ein regulaerer Lauf taete jetzt nichts: ' . $grund . "\n";
+    }
+    foreach ($ziele as $z) {
+        $r = bw_senden($c, $z['uuid'], $z['befehl']);
+        echo sprintf('  Ziel %d: %s an %s  ->  %s', $z['nr'], $z['befehl'], $z['uuid'],
+                     $r['ok'] ? $r['url'] : $r['text']) . "\n";
+    }
+    if (!$ziele) { echo '  Es ist kein Ziel eingerichtet.' . "\n"; }
+    bw_trocken(false);
+    exit(0);
+}
+
 if ($grund !== '') {
+    /* Auch ein Lauf, der nichts sendet, gibt ein Lebenszeichen ab. Es sagt
+       "ich lebe", nicht "es ist alles in Ordnung" - dafuer ist OK da. */
+    bw_lauf_schreiben(false);
+    bw_mqtt_lebenszeichen($c);
+    bw_melden($c);
     echo "nichts zu tun: " . $grund . "\n";
     exit(0);
 }
-if ($bw_probe) {
-    echo "wuerde senden: " . $c['befehl'] . " an " . $c['uuid'] . "\n";
+
+/* Erst ab hier wird gesendet - also erst ab hier die Sperre. Sie ist nicht
+   blockierend: wer nicht drankommt, geht wieder, der naechste Takt kommt in
+   fuenf Minuten ohnehin. Die Datei muss offen BLEIBEN, sonst faellt die
+   Sperre sofort. */
+$bw_sperre = bw_sperre();
+if ($bw_sperre === false) {
+    echo "nichts zu tun: ein anderer Lauf ist noch unterwegs\n";
     exit(0);
 }
 
-$r = bw_senden($c);
-$stand['letzte'] = time();
-$stand['letzte_ok'] = $r['ok'] ? time() : (isset($stand['letzte_ok']) ? $stand['letzte_ok'] : 0);
-$stand['gesendet'] = (isset($stand['gesendet']) ? (int) $stand['gesendet'] : 0) + 1;
-$stand['fehler'] = $r['ok'] ? 0 : ((isset($stand['fehler']) ? (int) $stand['fehler'] : 0) + 1);
-$stand['code'] = $r['code'];
-bw_stand_schreiben($stand);
+$gut = 0;
+$code = 0;
+$letzter_text = '';
+foreach ($ziele as $z) {
+    $r = bw_senden($c, $z['uuid'], $z['befehl']);
+    if ($r['ok']) { $gut++; } else { $letzter_text = $r['text']; }
+    $code = (int) $r['code'];
+    if (!$r['ok']) {
+        bw_log(sprintf('FEHLER beim Senden an Ziel %d: HTTP %d %s  (%s)',
+                       $z['nr'], $r['code'], $r['text'], $r['url']));
+    }
+}
+$alles = ($gut === count($ziele));
 
-/* Aufgeschrieben wird der ERSTE Befehl des Tages und jeder Fehler - nicht
-   jeder Lauf. Ein Vierteilstundentakt erzeugt sonst hundert Zeilen am Tag, in
-   denen die eine wichtige untergeht. */
 $heute = date('Y-m-d');
 $letzter_tag = isset($stand['tag']) ? (string) $stand['tag'] : '';
-if (!$r['ok']) {
-    bw_log(sprintf('FEHLER beim Senden: HTTP %d %s  (%s)', $r['code'], $r['text'], $r['url']));
-} elseif ($letzter_tag !== $heute) {
-    bw_log(sprintf('erster Befehl des Tages abgesetzt: %s an %s (HTTP %d)',
-                   $c['befehl'], $c['uuid'], $r['code']));
-}
-$stand['tag'] = $heute;
-bw_stand_schreiben($stand);
 
-echo ($r['ok'] ? 'gesendet' : 'FEHLER') . ': HTTP ' . $r['code']
-   . ' ' . substr($r['text'], 0, 120) . "\n";
-exit($r['ok'] ? 0 : 1);
+$stand['letzte'] = time();
+$stand['letzte_ok'] = $alles ? time() : (isset($stand['letzte_ok']) ? $stand['letzte_ok'] : 0);
+$stand['gesendet'] = (isset($stand['gesendet']) ? (int) $stand['gesendet'] : 0) + 1;
+$stand['fehler'] = $alles ? 0 : ((isset($stand['fehler']) ? (int) $stand['fehler'] : 0) + 1);
+$stand['code'] = $code;
+$stand['tag'] = $heute;
+
+/* Die Wirkung messen, nicht den Rueckgabewert - aber nur, wenn der Anwender
+   es eingeschaltet hat, und hoechstens einmal je Viertelstunde: die Messung
+   fragt je Jalousie mehrere Zustaende ab. */
+if (!empty($c['pruefen_ein'])) {
+    $letzte_pruefung = isset($stand['scharf_ts']) ? (int) $stand['scharf_ts'] : 0;
+    if (time() - $letzte_pruefung >= 900) {
+        list($pok, $pmeldung, $perg) = bw_automatiken($c);
+        if ($pok) {
+            $stand['scharf'] = (int) $perg['scharf'];
+            $stand['automatiken'] = (int) $perg['gesamt'];
+            $stand['scharf_ts'] = time();
+        } else {
+            bw_log_wenn_neu('pruefen', 'Die Automatiken liessen sich nicht zaehlen: '
+                                     . strip_tags((string) $pmeldung));
+        }
+    }
+}
+
+/* EINMAL schreiben, nicht zweimal. Bis 0.9.10 stand hier ein zweiter
+   Schreibvorgang, nur damit der Tag nachkam - auf einer Speicherkarte ist
+   das die doppelte Schreiblast fuer nichts. */
+bw_stand_schreiben($stand);
+bw_lauf_schreiben($alles);
+bw_mqtt_publish($c, $stand);
+bw_melden($c);
+
+/* Aufgeschrieben wird der ERSTE Befehl des Tages und jeder Fehler - nicht
+   jeder Lauf. Ein Fuenfminutentakt erzeugt sonst dreihundert Zeilen am Tag,
+   in denen die eine wichtige untergeht. */
+if ($alles && $letzter_tag !== $heute) {
+    bw_log(sprintf('erster Befehl des Tages abgesetzt: %d Ziel(e), HTTP %d',
+                   count($ziele), $code));
+}
+
+echo ($alles ? 'gesendet' : 'FEHLER') . ': ' . $gut . ' von ' . count($ziele)
+   . ' Ziel(en), HTTP ' . $code . ' ' . substr($letzter_text, 0, 100) . "\n";
+exit($alles ? 0 : 1);

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter"
 
-Version 0.9.5
+Version 0.9.11
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -9,6 +9,12 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Holt die Zugangsdaten aus der **zentralen LoxBerry-Konfiguration** — kein
   Passwort im Plugin, keines in der Loxone-Projektdatei.
 * Nur im eingestellten Zeitfenster und höchstens einmal je Abstand.
+* Bis zu **sechs Ziele** — ein Zentralbaustein oder einzelne Rollläden.
+* **Rückweg nach Loxone:** ein Endpunkt im unangemeldeten Bereich, den der
+  Miniserver ohne Zugangsdaten abfragen kann, geschützt durch ein Merkwort.
+* Wahlweise zusätzlich über **MQTT**, mit Lebenszeichen bei jedem Durchgang.
+* Misst auf Wunsch die **Wirkung** (`autoActive`) statt nur des Rückgabewerts.
+* Meldet sich beim **Healthcheck** von LoxBerry.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
 
 ## Woraus es entstanden ist
@@ -57,7 +63,7 @@ genug, dass eine Fassade, deren Sonne erst mittags kommt, den Tag nicht
 verpasst. Die Zahl steht an einer einzigen Stelle und lässt sich zwischen 5 und
 720 Minuten setzen.
 
-Der Cron läuft im Viertelstundentakt; die Entscheidung, ob wirklich gesendet
+Der Cron läuft **alle fünf Minuten**; die Entscheidung, ob wirklich gesendet
 wird, trifft das Plugin. So muss man beim Ändern des Abstands keine Datei
 verschieben.
 
@@ -74,11 +80,98 @@ verschieben.
 Am Zentralbaustein heißt der Befehl `auto`, an einem einzelnen Rollladen
 `autoshade/1`. Beides schaltet ein; `noauto` und `autoshade/0` schalten aus.
 
+## Einstellungen sichern und zurückspielen
+
+Zwei Knöpfe im Reiter *Einstellungen*. Der Zweck ist der **Umzug auf einen
+zweiten LoxBerry**, nicht die Sicherung gegen Verlust — dafür legt das Plugin
+bei jedem Speichern ohnehin eine Zweitschrift neben seinen Konfigurationsordner,
+und die überlebt ein Update.
+
+Die Datei ist JSON, trägt einen lesbaren Kopf mit Datum und Fassung und enthält
+**alle** Einstellungen — auch die, die gerade auf ihrem Vorgabewert stehen.
+
+**Sie enthält das Merkwort des Endpunkts** — und das ist Absicht. Ohne dieses
+eine Feld wären nach dem Zurückspielen alle Einstellungen richtig und das
+Plugin trotzdem unbrauchbar: jede in Loxone eingetragene Adresse trägt das
+Merkwort, und der Miniserver bekäme auf jede Abfrage eine 403. Der Preis steht
+dafür in der Oberfläche: **wer die Datei weitergibt, gibt den Schlüssel zu
+diesem Endpunkt weiter.**
+
+Das Kennwort des **Miniservers** steht nicht darin. Es liegt in der zentralen
+LoxBerry-Konfiguration, und dieses Plugin liest es dort, zeigt es nicht an und
+schreibt es nirgends hin.
+
+Beim Zurückspielen gilt: eine halb gültige Datei ändert **gar nichts**.
+Unbekannte Schlüssel und unzulässige Werte werden benannt, alle auf einmal, und
+der bisherige Stand bleibt unangetastet.
+
+## Der Rückweg: Loxone erfährt, ob der Wächter lebt
+
+Bis 0.9.10 war das Plugin eine **Einbahnstraße**. Es schickte Befehle, und
+Loxone erfuhr nie, ob es noch läuft — ein virtueller Eingang behält seinen
+letzten Wert, ein toter Wächter sah aus wie ein ruhiges Haus.
+
+Seit 0.9.11 gibt es einen Endpunkt im unangemeldeten Bereich:
+
+```
+/plugins/beschattungswaechter/index.php?token=<MERKWORT>&aktion=status
+```
+
+Er antwortet mit einer Zeile aus benannten Feldern (`OK`, `AKTIV`, `FENSTER`,
+`ZIELE`, `GESENDET`, `FEHLER`, `CODE`, `ALTER`, `ZAEHLER`, `SCHARF`,
+`AUTOMATIKEN`). Der Reiter *Einbindung in Loxone* führt in sieben Schritten
+durch die Einrichtung, zeigt zu jedem Feld die Befehlserkennung — mit dem
+**führenden Semikolon**, ohne das Loxone den falschen Treffer nimmt — und
+liefert zwei fertige Vorlagen zum Einlesen.
+
+Vier Festlegungen, jede aus einem Vorfall dieser Plugin-Sammlung:
+
+1. **Der Endpunkt legt nichts an.** Wer sich nicht ausweisen kann, hinterlässt
+   keine Datei — auch keine harmlose.
+2. **Der leere Fall wird vor dem Vergleich abgefangen.** `hash_equals('', '')`
+   ist in PHP `true`; ohne diese Prüfung stünde der Endpunkt offen, solange
+   kein Merkwort gesetzt ist.
+3. **Jeder Parameter geht durch `is_string()`.** `?token[]=x` ergäbe sonst
+   HTTP 500 mit leerem Rumpf — der Miniserver bekäme gar nichts zu lesen.
+4. **Jeder Weg schreibt eine Protokollzeile**, auch die Abweisung. Das Merkwort
+   selbst steht nie darin.
+
+Neben `status` kennt er `json`, `jetzt` (setzt den Befehl sofort ab, ohne
+Rücksicht auf Zeitfenster und Abstand) und `pruefen`.
+
+## MQTT
+
+Über HTTP *holt* der Miniserver die Werte ab; über MQTT *schickt* das Plugin sie
+von sich aus — bei **jedem** Durchgang, auch wenn nichts zu senden war. Sonst
+ist ein toter Wächter von einem ruhigen Haus nicht zu unterscheiden.
+
+Der MQTT-Gateway gehört seit LoxBerry 3 zum System. Bis zu seiner Fassung 1 muss
+das Abonnement dort von Hand eingetragen werden, ab Fassung 2 trägt der Gateway
+es selbst ein und schaltet das Eingabefeld ab. Der Reiter *MQTT* liest die
+Fassung aus `config/system/general.json` und zeigt genau den Satz, der zur
+gemessenen Fassung gehört — und wenn sie nicht lesbar ist, **beide**.
+
+## Die Wirkung messen, nicht den Rückgabewert
+
+`HTTP 200` heißt nur: der Miniserver hat den Befehl *angenommen*. Ob danach eine
+Automatik wirklich scharf ist, steht in einem anderen Zustand — `autoActive`.
+
+Das Plugin kann ihn über `LoxAPP3.json` für jeden Baustein vom Typ *Jalousie*
+abfragen und zählen. Am 28.08.2026 an einer Anlage mit 25 Jalousien gemessen:
+13 mit `autoActive = 1`, 12 mit `0`. Der Zentralbaustein `CentralJalousie` führt
+diesen Zustand **nicht** und wird deshalb nicht mitgezählt.
+
+Die Messung ist ab Werk **aus**: sie fragt je Jalousie mehrere Zustände ab, und
+auf einer großen Anlage ist das spürbare Last. Eingeschaltet läuft sie höchstens
+einmal je Viertelstunde.
+
 ## Das Protokoll
 
 Aufgeschrieben wird der **erste Befehl des Tages** und **jeder Fehler** — nicht
-jeder Lauf. Ein Viertelstundentakt erzeugte sonst hundert Zeilen am Tag, in
-denen die eine wichtige untergeht.
+jeder Lauf. Bei einem Fünfminutentakt ergäbe das rund dreihundert Zeilen am Tag,
+in denen die eine wichtige untergeht.
+
+`log/plugins` liegt auf einer Ramdisk: das Protokoll übersteht keinen Neustart.
 
 ## Voraussetzungen
 
