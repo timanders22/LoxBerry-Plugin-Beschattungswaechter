@@ -40,7 +40,7 @@ $bw_geladen = '';
 foreach ($bw_kandidaten as $bw_k) {
     if (is_file($bw_k)) { require_once $bw_k; $bw_geladen = $bw_k; break; }
 }
-if ($bw_geladen === '' || !function_exists('bw_pfade')) {
+if ($bw_geladen === '' || !function_exists('bw_paths')) {
     header('Content-Type: text/html; charset=utf-8');
     echo '<h2>Beschattungswaechter: der Unterbau wurde nicht gefunden</h2><ul>';
     foreach ($bw_kandidaten as $bw_k) {
@@ -68,11 +68,6 @@ if ($bw_lb !== '' && is_file($bw_lb . '/libs/phplib/loxberry_system.php')) {
 /* ---------- Sprache ------------------------------------------------------ */
 
 
-function bw_e($s)
-{
-    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
-}
-
 /* ---------- Reiter: Positivliste, ids und Leiste gehoeren zusammen -------- */
 $bw_reiter = array('tab-settings', 'tab-test', 'tab-log');
 $bw_tab = 'tab-settings';
@@ -85,7 +80,7 @@ if (isset($_POST['activetab']) && in_array((string) $_POST['activetab'], $bw_rei
 /* ---------- Eingaben verarbeiten ----------------------------------------- */
 $bw_cfg = bw_config();
 $bw_meldung = '';
-$bw_fehler = '';
+$bw_fehler = array();
 
 /* ---------------------------------------------------------------- *
  * Der Wachposten - EIN Posten, vor allen Handlern.
@@ -101,7 +96,7 @@ if ($bw_wache !== '') {
     if ($bw_reiter_merk !== null) {
         $_POST['activetab'] = $bw_reiter_merk;
     }
-    $bw_fehler = $bw_wache;
+    $bw_fehler[] = $bw_wache;
 }
 
 $bw_probe = null;
@@ -110,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     $u = bw_kennung_sauber(isset($_POST['uuid']) ? $_POST['uuid'] : '');
     $b = bw_kennung_sauber(isset($_POST['befehl']) ? $_POST['befehl'] : '');
     if ($u === '' || $b === '') {
-        $bw_fehler = bw_t('TEXT.KENNUNG_UNGUELTIG');
+        $bw_fehler[] = bw_t('TEXT.KENNUNG_UNGUELTIG');
     } else {
         $bw_cfg['aktiv'] = empty($_POST['aktiv']) ? 0 : 1;
         $bw_cfg['ms'] = (int) (isset($_POST['ms']) ? $_POST['ms'] : 0);
@@ -272,7 +267,7 @@ if ($bw_rahmen) {
 <div class="sm-wrap">
 
 <?php if ($bw_meldung !== '') { ?><div class="sm-hinweis"><?= bw_e($bw_meldung) ?></div><?php } ?>
-<?php if ($bw_fehler !== '') { ?><div class="sm-fehler"><?= bw_e($bw_fehler) ?></div><?php } ?>
+<?php foreach ($bw_fehler as $bw_fehler_m) { ?><div class="sm-fehler"><?= bw_e($bw_fehler_m) ?></div><?php } ?>
 
 <!-- Die Reiterleiste steht AUSGESCHRIEBEN da, nicht in einer Schleife
      erzeugt. Umgeschaltet wird ueber den Server, damit jeder Reiter
@@ -423,7 +418,7 @@ $bw_selbst[] = array('was' => bw_t('TEXT.S_REITER'),
    webfrontend. Drei blieben bei webfrontend stehen und suchten darunter
    ein bin/ - das gibt es dort nicht. */
 $bw_bin = dirname(dirname(dirname(dirname(__DIR__)))) . '/bin/plugins/'
-        . bw_pfade()['plugin'] . '/bw_lauf.php';
+        . bw_paths()['plugin'] . '/bw_lauf.php';
 $bw_binenv = getenv('LBPBINDIR');
 if ($bw_binenv !== false && $bw_binenv !== '') { $bw_bin = $bw_binenv . '/bw_lauf.php'; }
 $bw_selbst[] = array('was' => bw_t('TEXT.S_LAUF'), 'ok' => is_file($bw_bin),
@@ -438,7 +433,7 @@ $bw_selbst[] = array('was' => bw_t('TEXT.S_MS'), 'ok' => (bool) $bw_ms,
    einen Unterordner, und LoxBerry fuehrt in diesen Verzeichnissen nur Dateien
    aus. Eine Stunde lang kam kein einziger Lauf, und die Oberflaeche meldete
    nichts, weil sie gar nicht hinsah. */
-$bw_cron = ($bw_lb !== '') ? $bw_lb . '/system/cron/cron.05min/' . bw_pfade()['plugin'] : '';
+$bw_cron = ($bw_lb !== '') ? $bw_lb . '/system/cron/cron.05min/' . bw_paths()['plugin'] : '';
 $bw_cron_ok = ($bw_cron !== '' && is_file($bw_cron));
 $bw_selbst[] = array('was' => bw_t('TEXT.S_CRON'), 'ok' => $bw_cron_ok,
     'wie' => $bw_cron_ok ? $bw_cron : ($bw_cron === '' ? bw_t('TEXT.S_NICHT_GEFUNDEN')
@@ -446,12 +441,12 @@ $bw_selbst[] = array('was' => bw_t('TEXT.S_CRON'), 'ok' => $bw_cron_ok,
 
 /* Ein Rest aus der 0.9.0. Er schadet nicht, aber er gehoert weg - und man
    findet ihn sonst nie wieder. */
-$bw_rest = ($bw_lb !== '') ? $bw_lb . '/system/cron/cron.15min/' . bw_pfade()['plugin'] : '';
+$bw_rest = ($bw_lb !== '') ? $bw_lb . '/system/cron/cron.15min/' . bw_paths()['plugin'] : '';
 if ($bw_rest !== '' && file_exists($bw_rest)) {
     $bw_selbst[] = array('was' => bw_t('TEXT.S_REST'), 'ok' => false, 'wie' => $bw_rest);
 }
 
-$bw_cfgd = bw_pfade()['cfgdatei'];
+$bw_cfgd = bw_paths()['cfgdatei'];
 $bw_selbst[] = array('was' => bw_t('TEXT.S_SCHREIBBAR'),
     'ok' => is_writable(is_file($bw_cfgd) ? $bw_cfgd : dirname($bw_cfgd)), 'wie' => $bw_cfgd);
 ?>
@@ -470,7 +465,7 @@ $bw_selbst[] = array('was' => bw_t('TEXT.S_SCHREIBBAR'),
 <div class="sm-seite<?= $bw_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <h2><?php echo bw_t('TEXT.H_PROTOKOLL'); ?></h2>
 <?php
-$bw_logdatei = bw_pfade()['log'] . '/beschattung.log';
+$bw_logdatei = bw_paths()['log'] . '/beschattung.log';
 $bw_zeilen = is_file($bw_logdatei)
     ? array_slice(array_reverse(file($bw_logdatei, FILE_IGNORE_NEW_LINES) ?: array()), 0, 80)
     : array();

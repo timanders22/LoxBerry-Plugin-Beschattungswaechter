@@ -29,7 +29,7 @@
  */
 
 /** Pfade des Plugins. LBP*-Umgebungsvariablen setzt LoxBerry. */
-function bw_pfade()
+function bw_paths()
 {
     static $p = null;
     if ($p !== null) {
@@ -101,7 +101,7 @@ function bw_vorgaben()
 
 function bw_config()
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     $c = bw_vorgaben();
     if (is_file($p['cfgdatei'])) {
         $d = json_decode((string) @file_get_contents($p['cfgdatei']), true);
@@ -120,7 +120,7 @@ function bw_config()
 
 function bw_config_speichern(array $c)
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     if (!is_dir($p['config'])) {
         @mkdir($p['config'], 0775, true);
     }
@@ -138,7 +138,7 @@ function bw_config_speichern(array $c)
 
 function bw_log($text)
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     if (!is_dir($p['log'])) {
         @mkdir($p['log'], 0775, true);
     }
@@ -159,7 +159,7 @@ function bw_log($text)
  */
 function bw_miniserver()
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     $f = $p['lbhome'] . '/config/system/general.json';
     if ($p['lbhome'] === '' || !is_file($f)) {
         return array();
@@ -254,7 +254,7 @@ function bw_senden(array $c)
 
 function bw_stand_lesen()
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     $f = $p['datadir'] . '/stand.json';
     if (!is_file($f)) {
         return array();
@@ -265,7 +265,7 @@ function bw_stand_lesen()
 
 function bw_stand_schreiben(array $s)
 {
-    $p = bw_pfade();
+    $p = bw_paths();
     if (!is_dir($p['datadir'])) {
         @mkdir($p['datadir'], 0775, true);
     }
@@ -404,7 +404,7 @@ function bw_merkwort()
     if ($wort !== null) {
         return $wort;
     }
-    $pfade = bw_pfade();
+    $pfade = bw_paths();
     $verz  = isset($pfade['datadir']) ? $pfade['datadir'] : '';
     if ($verz === '') {
         return '';
@@ -471,4 +471,12 @@ function bw_wachposten()
         return bw_t('WACHE.FALSCH');
     }
     return '';
+}
+
+/* Der Escape-Helfer gehoert in die Bibliothek, nicht in
+ * index.php: sonst steht er dem Endpunkt und jedem weiteren
+ * Aufrufer nicht zur Verfuegung (Hausform, REGELN_2). */
+function bw_e($s)
+{
+    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
 }
