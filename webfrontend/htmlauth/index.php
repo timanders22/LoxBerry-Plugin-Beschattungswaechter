@@ -86,6 +86,24 @@ if (isset($_POST['activetab']) && in_array((string) $_POST['activetab'], $bw_rei
 $bw_cfg = bw_config();
 $bw_meldung = '';
 $bw_fehler = '';
+
+/* ---------------------------------------------------------------- *
+ * Der Wachposten - EIN Posten, vor allen Handlern.
+ * Abgewiesen heisst gemeldet, und es wird NICHTS ausgefuehrt: $_POST
+ * wird geleert, nur der aktive Reiter bleibt stehen, damit der Bediener
+ * nach der Abweisung dort steht, wo er war.
+ * ---------------------------------------------------------------- */
+$bw_wache = bw_wachposten();
+if ($bw_wache !== '') {
+    $bw_reiter_merk = isset($_POST['activetab']) && is_string($_POST['activetab'])
+        ? (string) $_POST['activetab'] : null;
+    $_POST = array();
+    if ($bw_reiter_merk !== null) {
+        $_POST['activetab'] = $bw_reiter_merk;
+    }
+    $bw_fehler = $bw_wache;
+}
+
 $bw_probe = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
@@ -277,6 +295,7 @@ if ($bw_rahmen) {
 <div class="sm-step"><?php echo bw_t('TEXT.WARUM'); ?></div>
 
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
 <div class="sm-feld">
@@ -339,10 +358,12 @@ if ($bw_rahmen) {
        Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
        einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
+    <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="bw_sichern" value="1"><?= bw_t('TEXT.K_SICHERN') ?></button>
   </form>
   <form action="index.php" method="post" enctype="multipart/form-data">
+    <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="bw_sicherung" accept=".json">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('TEXT.K_ZURUECK') ?></button>
@@ -362,6 +383,7 @@ if ($bw_rahmen) {
 </div>
 
 <form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-test">
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="jetzt" value="1"><?php echo bw_t('TEXT.JETZT'); ?></button>
