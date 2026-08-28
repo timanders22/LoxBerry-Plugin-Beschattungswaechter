@@ -59,7 +59,7 @@ function bw_pfade()
         'lbhome' => $lb,
         'config' => ($cfg !== false && $cfg !== '') ? $cfg : $lb . '/config/plugins/' . $ordner,
         'log'    => ($log !== false && $log !== '') ? $log : $lb . '/log/plugins/' . $ordner,
-        'data'   => ($dat !== false && $dat !== '') ? $dat : $lb . '/data/plugins/' . $ordner,
+        'datadir'   => ($dat !== false && $dat !== '') ? $dat : $lb . '/data/plugins/' . $ordner,
     );
     $p['cfgdatei'] = $p['config'] . '/beschattung.json';
     $p['sicherung'] = $lb . '/config/plugins/' . $ordner . '.backup.json';
@@ -255,7 +255,7 @@ function bw_senden(array $c)
 function bw_stand_lesen()
 {
     $p = bw_pfade();
-    $f = $p['data'] . '/stand.json';
+    $f = $p['datadir'] . '/stand.json';
     if (!is_file($f)) {
         return array();
     }
@@ -266,10 +266,10 @@ function bw_stand_lesen()
 function bw_stand_schreiben(array $s)
 {
     $p = bw_pfade();
-    if (!is_dir($p['data'])) {
-        @mkdir($p['data'], 0775, true);
+    if (!is_dir($p['datadir'])) {
+        @mkdir($p['datadir'], 0775, true);
     }
-    $f = $p['data'] . '/stand.json';
+    $f = $p['datadir'] . '/stand.json';
     $tmp = $f . '.tmp';
     if (@file_put_contents($tmp, json_encode($s, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) !== false) {
         @rename($tmp, $f);
@@ -405,7 +405,7 @@ function bw_merkwort()
         return $wort;
     }
     $pfade = bw_pfade();
-    $verz  = isset($pfade['data']) ? $pfade['data'] : '';
+    $verz  = isset($pfade['datadir']) ? $pfade['datadir'] : '';
     if ($verz === '') {
         return '';
     }
