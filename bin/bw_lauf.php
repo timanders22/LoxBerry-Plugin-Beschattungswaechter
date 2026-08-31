@@ -63,16 +63,44 @@ $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
 $alter = $letzte > 0 ? (time() - $letzte) : PHP_INT_MAX;
 $ziele = bw_ziele($c);
 
+/* NACH EINEM FEHLSCHLAG WIRD FRUEHER WIEDER ANGEKLOPFT.
+ *
+ * Bis 0.9.12 setzte der Lauf 'letzte' auch dann, wenn KEIN einziges Ziel
+ * erreichbar war - der naechste Versuch kam damit erst nach dem vollen
+ * Abstand. War der Miniserver in der einen Minute im Neustart, geschah mit
+ * der Werkseinstellung bis zu einer Stunde nichts mehr, obwohl der Cron alle
+ * fuenf Minuten anklopfte. Solange Fehler in Folge stehen, gilt deshalb die
+ * kuerzere Frist. */
+$bw_fehlerstand = isset($stand['fehler']) ? (int) $stand['fehler'] : 0;
+$wartezeit = ($bw_fehlerstand > 0)
+    ? min((int) $c['abstand'], 15) * 60
+    : (int) $c['abstand'] * 60;
+
+/* EIN HALBER TAKT TOLERANZ, und zwar aus einem gemessenen Grund.
+ *
+ * 'letzte' wird NACH dem Senden gesetzt, also ein paar Sekunden nach dem
+ * Beginn des Laufs. Der Takt bei genau +60 Minuten sah damit 3598 Sekunden,
+ * verglich sie mit 3600 und uebersprang - gesendet wurde erst fuenf Minuten
+ * spaeter, und das wanderte mit jeder Stunde weiter. Aus 60 Minuten wurden
+ * 65, aus dem kleinsten Abstand (5) wurden 10, also das Doppelte. */
+$bw_toleranz = 150;
+
 $grund = '';
+/* Nicht jeder Grund, nichts zu tun, ist eine Stoerung: abgeschaltet und
+   ausserhalb des Zeitfensters sind der bestimmungsgemaesse Betrieb. Nur ein
+   fehlendes Ziel ist einer - und genau diese Unterscheidung traegt das Feld
+   OK nach Loxone. */
+$bw_stoerung = false;
 if (!$ziele) {
     $grund = 'kein Ziel eingerichtet';
+    $bw_stoerung = true;
 } elseif (empty($c['aktiv']) && !$bw_jetzt) {
     $grund = 'abgeschaltet';
 } elseif (!bw_im_fenster($c) && !$bw_jetzt) {
     $grund = 'ausserhalb des Zeitfensters ' . $c['von'] . '-' . $c['bis'];
-} elseif ($alter < (int) $c['abstand'] * 60 && !$bw_jetzt) {
+} elseif ($alter + $bw_toleranz < $wartezeit && !$bw_jetzt) {
     $grund = sprintf('erst %d von %d Minuten seit dem letzten Befehl',
-                     (int) floor($alter / 60), (int) $c['abstand']);
+                     (int) floor($alter / 60), (int) round($wartezeit / 60));
 }
 
 if ($bw_probe) {
@@ -96,9 +124,15 @@ if ($bw_probe) {
 }
 
 if ($grund !== '') {
-    /* Auch ein Lauf, der nichts sendet, gibt ein Lebenszeichen ab. Es sagt
-       "ich lebe", nicht "es ist alles in Ordnung" - dafuer ist OK da. */
-    bw_lauf_schreiben(false);
+    /* Auch ein Lauf, der nichts sendet, gibt ein Lebenszeichen ab: ZAEHLER
+       und der Zeitstempel gehen weiter.
+     *
+     * OK sagt dabei NICHT "es wurde gesendet", sondern "der Durchgang endete
+     * ohne Stoerung". Bis 0.9.12 stand hier fest false, und damit stand OK
+     * mit der Werkseinstellung 55 von 60 Minuten je Stunde auf 0 und nachts
+     * durchgehend - ohne dass irgendetwas war. Wer darauf in Loxone eine
+     * Ueberwachung legte, hatte eine Dauerstoerung. */
+    bw_lauf_schreiben(!$bw_stoerung);
     bw_mqtt_lebenszeichen($c);
     bw_melden($c);
     echo "nichts zu tun: " . $grund . "\n";
@@ -116,17 +150,35 @@ if ($bw_sperre === false) {
 }
 
 $gut = 0;
-$code = 0;
+/* ZWEI CODES, NICHT EINER. Bis 0.9.12 stand hier ein unbedingtes
+   $code = $r['code'] in der Schleife - bei zwei Zielen, von denen das erste
+   tot und das zweite gut war, meldete der Stand HTTP 200 UND einen erhoehten
+   Fehlerzaehler. Der Healthcheck sagte dann "1 Fehler, HTTP 200", und das ist
+   keine Auskunft, sondern ein Raetsel. Gilt der Code des ERSTEN Fehlschlags;
+   erst wenn keiner fehlschlug, der des letzten guten Ziels. */
+$code_fehler = 0;
+$code_gut = 0;
 $letzter_text = '';
 foreach ($ziele as $z) {
     $r = bw_senden($c, $z['uuid'], $z['befehl']);
-    if ($r['ok']) { $gut++; } else { $letzter_text = $r['text']; }
-    $code = (int) $r['code'];
-    if (!$r['ok']) {
-        bw_log(sprintf('FEHLER beim Senden an Ziel %d: HTTP %d %s  (%s)',
-                       $z['nr'], $r['code'], $r['text'], $r['url']));
+    if ($r['ok']) {
+        $gut++;
+        $code_gut = (int) $r['code'];
+        continue;
     }
+    $letzter_text = $r['text'];
+    if ($code_fehler === 0) { $code_fehler = (int) $r['code']; }
+    /* Die Bremse steht hier, seit der Fehlschlag alle 15 Minuten statt
+       stuendlich wiederholt wird: sonst schreibt ein toter Miniserver das
+       Protokoll voll und draengt genau die Zeilen weg, die erklaeren, wann
+       es angefangen hat. Der HTTP-Code steht IM Merker - eine andere Art zu
+       scheitern wird dadurch sofort sichtbar und nicht erst in einer
+       Stunde. */
+    bw_log_wenn_neu('senden' . $z['nr'] . '_' . (int) $r['code'],
+        sprintf('FEHLER beim Senden an Ziel %d: HTTP %d %s  (%s)',
+                $z['nr'], $r['code'], $r['text'], $r['url']));
 }
+$code = ($gut === count($ziele)) ? $code_gut : $code_fehler;
 $alles = ($gut === count($ziele));
 
 $heute = date('Y-m-d');

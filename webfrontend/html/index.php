@@ -14,11 +14,16 @@
  *
  * VIER FESTLEGUNGEN, jede aus einem Vorfall dieser Sammlung:
  *
- * 1. ER LEGT NICHTS AN. bw_config(false) liest nur. Bei EVCC, Govee und dem
- *    Saugroboter genuegte ein einziger Aufruf OHNE Merkwort - korrekt mit 403
- *    beantwortet -, und danach lag eine frisch erzeugte Konfigurationsdatei
- *    samt Merkwort im Ordner. Wer sich nicht ausweisen kann, hinterlaesst
- *    keine Datei, auch keine harmlose.
+ * 1. ER LEGT KEINE KONFIGURATION AN. bw_config(false) liest nur. Bei EVCC,
+ *    Govee und dem Saugroboter genuegte ein einziger Aufruf OHNE Merkwort -
+ *    korrekt mit 403 beantwortet -, und danach lag eine frisch erzeugte
+ *    Konfigurationsdatei samt Merkwort im Ordner. Wer sich nicht ausweisen
+ *    kann, bekommt kein Merkwort geschenkt.
+ *
+ *    Die Protokollzeile aus Festlegung 4 entsteht sehr wohl, und mit ihr die
+ *    Protokolldatei. Bis 0.9.12 stand hier "hinterlaesst keine Datei, auch
+ *    keine harmlose" - das widersprach der vierten Festlegung im selben Kopf,
+ *    und der Code folgte der vierten. Gemeint war immer die Konfiguration.
  *
  * 2. DER LEERE FALL WIRD VOR DEM VERGLEICH ABGEFANGEN. hash_equals('', '')
  *    ist in PHP TRUE - ohne diese Pruefung stuende der Endpunkt offen,
@@ -33,6 +38,15 @@
  *    fremdes Geraet kann sich nicht beschweren; bleibt eine Wirkung aus, ist
  *    das Protokoll die einzige Stelle, an der steht, ob ueberhaupt jemand
  *    angerufen hat. Das Merkwort selbst steht nie darin.
+ *
+ *    ABER: die ABWEISUNG wird gebremst, je Aufrufer und Grund hoechstens
+ *    einmal je Stunde. Nachgemessen am 29.08.2026: bw_log() kappt bei
+ *    262144 Byte auf die letzten 800 Zeilen, und rund 2800 Aufrufe ohne
+ *    Merkwort haben damit die gesamte Vorgeschichte weggedraengt. Ein
+ *    Protokoll, das jeder Unbefugte leeren kann, ist an genau der Stelle
+ *    unbrauchbar, fuer die es diese Festlegung gibt. Der ERSTE Anruf einer
+ *    Adresse steht sofort da; die Wiederholung wird gezaehlt, nicht
+ *    geschrieben.
  *
  * (c) Beschattungswaechter Plugin Authors - MIT-Lizenz
  */
@@ -56,14 +70,27 @@ require_once $bw_lib;
 
 header('Content-Type: text/plain; charset=utf-8');
 
-/** Antworten und aufhoeren. */
-function bw_ende($code, $zeile, $protokoll = '')
+/**
+ * Antworten und aufhoeren.
+ *
+ * $bremse setzt die Zeile unter die Stundenbremse - fuer alles, was ein
+ * Unbefugter beliebig oft ausloesen kann. Der Merker haengt am GRUND und
+ * nicht an der Adresse: ein Merker je Adresse waere eine Datei, deren Anzahl
+ * der Aufrufer bestimmt, und das ist genau die Sorte Vorrat, die man einem
+ * Unbekannten nicht ueberlaesst. Die Adresse steht dafuer in der Zeile.
+ */
+function bw_ende($code, $zeile, $protokoll = '', $bremse = '')
 {
     http_response_code((int) $code);
     echo $zeile . "\n";
     if ($protokoll !== '') {
         $von = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '?';
-        bw_log('Endpunkt (' . $von . '): ' . $protokoll);
+        $text = 'Endpunkt (' . $von . '): ' . $protokoll;
+        if ($bremse !== '') {
+            bw_log_wenn_neu('endpunkt_' . $bremse, $text);
+        } else {
+            bw_log($text);
+        }
     }
     exit;
 }
@@ -98,11 +125,11 @@ $bw_selftest = bw_par('selftest') === '1';
  * Selbsttest darf keine Abkuerzung an der Sicherheit vorbei sein. */
 if ($bw_soll === '') {
     bw_ende(403, ($bw_selftest ? 'SELFTEST' : 'BW') . ';OK=0;ERR=KEIN_TOKEN_EINGERICHTET',
-            'abgewiesen - es ist kein Merkwort eingerichtet');
+            'abgewiesen - es ist kein Merkwort eingerichtet', 'kein_token');
 }
 if ($bw_ist === '' || !hash_equals($bw_soll, $bw_ist)) {
     bw_ende(403, ($bw_selftest ? 'SELFTEST' : 'BW') . ';OK=0;ERR=TOKEN',
-            'abgewiesen - falsches oder fehlendes Merkwort');
+            'abgewiesen - falsches oder fehlendes Merkwort', 'falsches_token');
 }
 if ($bw_selftest) {
     bw_ende(200, 'SELFTEST;OK=1;TOKEN=OK', 'Selbsttest, nichts ausgeloest');
@@ -132,18 +159,44 @@ if ($bw_aktion === 'jetzt') {
     /* Der Anlass statt der Uhr: Loxone loest im Augenblick aus, in dem die
        Beschattungsfreigabe kommt, statt bis zu sechzig Minuten spaeter. Das
        Zeitfenster und der Abstand gelten hier bewusst NICHT - wer den Befehl
-       schickt, meint ihn. */
+       schickt, meint ihn.
+     *
+     * DER HAUPTSCHALTER GILT SEHR WOHL. Bis 0.9.12 stand hier nur die
+     * Zielpruefung: ein im Reiter Einstellungen abgeschaltetes Plugin sendete
+     * weiter, sobald der virtuelle Ausgang feuerte. Der Kommentar
+     * rechtfertigte ausdruecklich nur Fenster und Abstand - "aus" war nie
+     * gemeint, es stand nur nirgends. */
+    if (empty($bw_cfg['aktiv'])) {
+        bw_ende(409, 'BW;OK=0;ERR=ABGESCHALTET', 'jetzt: das Plugin ist abgeschaltet');
+    }
     $bw_ziele = bw_ziele($bw_cfg);
     if (!$bw_ziele) {
         bw_ende(409, 'BW;OK=0;ERR=KEIN_ZIEL', 'jetzt: kein Ziel eingerichtet');
     }
+    /* DIESELBE SPERRE WIE IM CRON-LAUF. Beide Wege fassen stand.json
+       lesen-aendern-schreibend an; ohne die Sperre gehen bei Ueberschneidung
+       die Zaehler verloren (die Datei selbst bleibt heil, dafuer sorgt
+       bw_json_schreiben). Sie ist nicht blockierend: wer nicht drankommt,
+       bekommt eine Antwort und keine Wartezeit. */
+    $bw_lock = bw_sperre();
+    if ($bw_lock === false) {
+        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'jetzt: ein anderer Lauf ist noch unterwegs');
+    }
     $bw_gut = 0;
-    $bw_code = 0;
+    $bw_code_fehler = 0;
+    $bw_code_gut = 0;
     foreach ($bw_ziele as $bw_z) {
         $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
-        if ($bw_r['ok']) { $bw_gut++; }
-        $bw_code = (int) $bw_r['code'];
+        if ($bw_r['ok']) {
+            $bw_gut++;
+            $bw_code_gut = (int) $bw_r['code'];
+            continue;
+        }
+        /* Der Code des ERSTEN Fehlschlags - nicht der des letzten Ziels.
+           Sonst steht im Stand HTTP 200 neben einem erhoehten Fehlerzaehler. */
+        if ($bw_code_fehler === 0) { $bw_code_fehler = (int) $bw_r['code']; }
     }
+    $bw_code = ($bw_gut === count($bw_ziele)) ? $bw_code_gut : $bw_code_fehler;
     $bw_st = bw_stand_lesen();
     $bw_st['letzte'] = time();
     if ($bw_gut > 0) { $bw_st['letzte_ok'] = time(); }
@@ -152,7 +205,10 @@ if ($bw_aktion === 'jetzt') {
         ? 0 : ((isset($bw_st['fehler']) ? (int) $bw_st['fehler'] : 0) + 1);
     $bw_st['code'] = $bw_code;
     bw_stand_schreiben($bw_st);
-    bw_lauf_schreiben($bw_gut === count($bw_ziele));
+    /* takt = false: der Endpunkt sagt etwas ueber den Erfolg DIESES Befehls
+       und nichts darueber, ob der Fuenfminutenlauf noch geht. Zeitstempel und
+       Zaehler bleiben deshalb stehen - siehe bw_lauf_schreiben(). */
+    bw_lauf_schreiben($bw_gut === count($bw_ziele), false);
     /* Ein Ausloeser meldet SOFORT, nicht beim naechsten Cron. Ueber HTTP
        holt der Miniserver den Wert beim naechsten Abruf ab; ueber MQTT muss
        ihn das Plugin schicken - sonst sieht ein Test, der erst eine Minute
@@ -168,6 +224,29 @@ if ($bw_aktion === 'pruefen') {
         /* Ab Werk aus - und das wird gesagt, nicht stillschweigend als 0
            beantwortet. Eine 0 saehe aus wie ein Messwert. */
         bw_ende(409, 'BW;OK=0;ERR=PRUEFEN_AUS', 'pruefen: abgeschaltet');
+    }
+    /* DIE VIERTELSTUNDE WIRD ERZWUNGEN, NICHT NUR ZUGESAGT.
+     *
+     * Ein Aufruf erzeugt bis zu 1 + 3x40 = 121 nacheinander laufende Abrufe
+     * an den Miniserver, jeder mit der eingestellten Frist. Der Cron-Lauf hat
+     * diese Bremse seit jeher (bw_lauf.php); der Endpunkt hatte sie nicht,
+     * obwohl der Kommentar in der Loxone-Vorlage dem Anwender "nicht oefter
+     * als alle 15 Minuten" zusagt. Eine Zusage, die niemand einhaelt, ist
+     * keine. Die letzte Messung wird zurueckgegeben - sie ist hoechstens eine
+     * Viertelstunde alt und damit dasselbe, was der Cron-Lauf liefern
+     * wuerde. */
+    $bw_st = bw_stand_lesen();
+    $bw_letzte_pruefung = isset($bw_st['scharf_ts']) ? (int) $bw_st['scharf_ts'] : 0;
+    if (time() - $bw_letzte_pruefung < 900) {
+        bw_ende(200, bw_statuszeile($bw_cfg, $bw_st),
+                'pruefen: letzte Messung ist ' . (time() - $bw_letzte_pruefung)
+                . ' s alt, nicht neu gemessen');
+    }
+    /* Dieselbe Sperre wie bei jetzt: die Messung haelt einen Webserver-
+       Arbeiter lange fest, und der Cron-Lauf misst dasselbe. */
+    $bw_lock = bw_sperre();
+    if ($bw_lock === false) {
+        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'pruefen: ein anderer Lauf ist noch unterwegs');
     }
     list($bw_ok, $bw_meldung, $bw_erg) = bw_automatiken($bw_cfg);
     if (!$bw_ok) {

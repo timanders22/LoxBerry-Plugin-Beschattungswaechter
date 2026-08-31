@@ -74,10 +74,10 @@ $bw_rahmen = class_exists('LBWeb', false);
    einen Formulars die Werte des anderen stillschweigend nullen. */
 $bw_reiter = array('tab-settings', 'tab-mqtt', 'tab-loxone', 'tab-test', 'tab-log');
 $bw_tab = 'tab-settings';
-if (isset($_POST['activetab']) && in_array((string) $_POST['activetab'], $bw_reiter, true)) {
-    $bw_tab = (string) $_POST['activetab'];
-} elseif (isset($_GET['form']) && in_array('tab-' . $_GET['form'], $bw_reiter, true)) {
-    $bw_tab = 'tab-' . $_GET['form'];
+if (in_array(bw_eingabe($_POST, 'activetab'), $bw_reiter, true)) {
+    $bw_tab = bw_eingabe($_POST, 'activetab');
+} elseif (in_array('tab-' . bw_eingabe($_GET, 'form'), $bw_reiter, true)) {
+    $bw_tab = 'tab-' . bw_eingabe($_GET, 'form');
 }
 
 /* ---------- Eingaben verarbeiten ----------------------------------------- */
@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     /* Der Miniserver wird ueber seinen SCHLUESSEL gespeichert, nicht ueber
        seine Stellung - siehe bw_vorgaben(). Die Stellung wird mitgefuehrt,
        damit eine aeltere Fassung des Plugins die Datei weiter lesen kann. */
-    $bw_wahl = isset($_POST['ms_nr']) ? trim((string) $_POST['ms_nr']) : '';
+    $bw_wahl = bw_eingabe($_POST, 'ms_nr');
     if (bw_wert_pruefen('ms_nr', $bw_wahl)) {
         $bw_neu['ms_nr'] = $bw_wahl;
         foreach (bw_miniserver() as $bw_i => $bw_m) {
@@ -168,6 +168,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         }
     }
     $bw_neu['pruefen_ein'] = empty($_POST['pruefen_ein']) ? 0 : 1;
+    /* EINE HALB AUSGEFUELLTE ZEILE WIRD GENANNT, NICHT UEBERGANGEN.
+       Seit 0.9.13 darf der Befehl eines weiteren Ziels leer sein - so raeumt
+       man es aus. Steht dann aber noch eine Kennung da, wird diese Zeile
+       stillschweigend nicht gesendet (bw_ziele zaehlt nur vollstaendige
+       Ziele), und der Bediener saehe nichts als eine Zeile, die nichts tut. */
+    for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
+        $bw_hu = isset($bw_neu['uuid' . $bw_i]) ? trim((string) $bw_neu['uuid' . $bw_i]) : '';
+        $bw_hb = isset($bw_neu['befehl' . $bw_i]) ? trim((string) $bw_neu['befehl' . $bw_i]) : '';
+        if ($bw_hu !== '' && $bw_hb === '') {
+            $bw_fehler[] = sprintf(bw_t('TEXT.ZIEL_HALB'), $bw_i);
+        }
+    }
     if (bw_config_speichern($bw_neu)) {
         $bw_meldungen[] = $bw_fehler
             ? bw_t('TEXT.GESPEICHERT_TEILWEISE') : bw_t('TEXT.GESPEICHERT');
@@ -185,7 +197,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
     $bw_neu = $bw_cfg;
     $bw_neu['mqtt_ein'] = empty($_POST['mqtt_ein']) ? 0 : 1;
-    $bw_th = isset($_POST['mqtt_thema']) ? trim((string) $_POST['mqtt_thema']) : '';
+    $bw_th = bw_eingabe($_POST, 'mqtt_thema');
     if (bw_wert_pruefen('mqtt_thema', $bw_th)) {
         $bw_neu['mqtt_thema'] = $bw_th;
     } else {
@@ -226,6 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token_neu'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
     $bw_art = (isset($_POST['vorlage']) && is_string($_POST['vorlage'])
                && $_POST['vorlage'] === 'out') ? 'out' : 'in';
+    $bw_vtoken = trim((string) (isset($bw_cfg['aktionstoken']) ? $bw_cfg['aktionstoken'] : ''));
     list($bw_dname, $bw_inhalt) = bw_vorlage($bw_art, $bw_cfg);
     /* Wohlgeformt oder nicht - das ist nicht verhandelbar. Der Anwender
        merkt eine kaputte Vorlage sonst erst in Loxone Config, und dort sucht
@@ -234,7 +247,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
     $bw_wohl = simplexml_load_string($bw_inhalt) !== false;
     libxml_clear_errors();
     libxml_use_internal_errors($bw_frueher);
-    if (!$bw_wohl) {
+    if ($bw_vtoken === '') {
+        /* OHNE MERKWORT WIRD NICHTS AUSGELIEFERT. Beide Vorlagen tragen es
+           in der Adresse; ohne eines entstuende eine Datei mit leerem
+           token=, und der Bediener importierte einen virtuellen Eingang, der
+           auf Dauer 403 bekommt - der Grund stuende nirgends. Dieselbe
+           Haltung wie eine Zeile weiter unten: lieber keine Datei als eine,
+           die stumm nicht wirkt. */
+        $bw_fehler[] = bw_t('TEXT.VORLAGE_OHNE_TOKEN');
+    } elseif (!$bw_wohl) {
         $bw_fehler[] = bw_t('TEXT.VORLAGE_KAPUTT');
     } else {
         header('Content-Type: application/x-download');
@@ -324,7 +345,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
             : ((isset($bw_st['fehler']) ? (int) $bw_st['fehler'] : 0) + 1);
         $bw_st['code'] = (int) $bw_ergebnisse[count($bw_ergebnisse) - 1]['code'];
         bw_stand_schreiben($bw_st);
-        bw_lauf_schreiben($bw_gut === count($bw_ergebnisse));
+        /* takt = false: der Knopf im Reiter Test sagt etwas ueber DIESEN
+           Befehl und nichts darueber, ob der Fuenfminutenlauf noch geht -
+           siehe bw_lauf_schreiben(). */
+        bw_lauf_schreiben($bw_gut === count($bw_ergebnisse), false);
         bw_mqtt_publish($bw_cfg, $bw_st);
         bw_log('von Hand ausgeloest: ' . $bw_gut . ' von ' . count($bw_ergebnisse)
              . ' Ziel(en) angenommen');
@@ -336,13 +360,14 @@ $bw_ms = bw_miniserver();
 
 /* ---------------- Einstellungen sichern ----------------
  *
- * Ausgegeben wird die VOLLE Konfiguration samt lesbarem Kopf. Ein
- * Aktionstoken ist NICHT darunter, weil dieses Plugin keinen hat: es fuehrt
- * keinen Endpunkt im unangemeldeten Bereich, und die Zugangsdaten des
- * Miniservers stehen in der zentralen LoxBerry-Konfiguration. Die Datei
- * traegt also Einstellungen und kein Geheimnis - und genau das sagt der
- * Hinweis am Knopf. Bis 0.9.10 behauptete er das Gegenteil, zwei Absaetze
- * unter einem Satz, der es richtig sagte. */
+ * Ausgegeben wird die VOLLE Konfiguration samt lesbarem Kopf, und das
+ * Aktionstoken ist DARUNTER: ohne dasselbe Merkwort zeigen nach dem
+ * Zurueckspielen alle Adressen in der Loxone-Projektdatei ins Leere.
+ *
+ * Damit ist die Datei vertraulich, und der Hinweis am Knopf sagt genau das.
+ * Bis 0.9.12 sagte er das Gegenteil - ein Satz aus der 0.9.10, die noch
+ * keinen Endpunkt hatte. Das Kennwort des Miniservers steht weiterhin nicht
+ * darin; es liegt in der zentralen LoxBerry-Konfiguration. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_sichern'])) {
     $bw_js = json_encode(bw_sicherung_bauen(),
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -369,7 +394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
     } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
         $bw_fehler[] = bw_t('TEXT.SICH_ZU_GROSS');
     } else {
-        list($bw_neu, $bw_mangel, $bw_n) = bw_sicherung_lesen(
+        list($bw_neu, $bw_mangel, $bw_n, $bw_shinweise) = bw_sicherung_lesen(
             (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
         if ($bw_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
@@ -378,6 +403,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
                             . implode(' ', $bw_mangel);
         } elseif (bw_config_speichern($bw_neu)) {
             $bw_meldungen[] = sprintf(bw_t('TEXT.SICH_UEBERNOMMEN'), $bw_n);
+            /* Was die Datei NICHT enthielt, gehoert in die Meldung. Eine
+               Zahl allein ("21 Werte uebernommen") verschweigt genau den
+               Fall, in dem der Bediener etwas wissen muss. */
+            foreach ($bw_shinweise as $bw_h) { $bw_meldungen[] = $bw_h; }
             /* Die Felder darunter zeigen sonst weiter den alten Stand: der
                Bediener sieht keine Aenderung und drueckt noch einmal. */
             $bw_cfg = bw_config();
@@ -422,11 +451,17 @@ if ($bw_rahmen) {
    von einem Werkzeug: rendern.py sieht HTML, kein Bild.
    Die Raute in der SVG-Adresse wird als %23 geschrieben - eine rohe Raute
    beendet den CSS-Wert. */
-.sm-wrap select.sm-auswahl {
+/* Die Regel gilt fuer JEDES Auswahlfeld, nicht nur fuer eines mit einer
+   eigenen Klasse. Bis 0.9.12 stand hier 'select.sm-auswahl': heute trug das
+   einzige Auswahlfeld der Seite die Klasse, und das naechste ohne sie haette
+   den Pfeil stumm verloren - genau der Mangel, gegen den dieser Block
+   geschrieben wurde. Wortlaut jetzt aus VORLAGE_hausstandard.css.html. */
+.sm-wrap select {
   appearance: none; -webkit-appearance: none; -moz-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23546e7a' stroke-width='2'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 10px center;
-  padding-right: 32px; }
+  padding-right: 32px; cursor: pointer; }
+.sm-tbl select { padding-right: 28px; background-position: right 7px center; }
 .sm-hilfe { font-size: 0.85em; color: #555; margin: 4px 0 0; max-width: 640px; }
 .sm-step { border: 1px solid #ddd; border-left: 4px solid #6dac20; background: #fafafa;
     border-radius: 6px; padding: 12px 14px; margin: 12px 0; font-size: 0.92em; line-height: 1.5; }
@@ -438,7 +473,7 @@ if ($bw_rahmen) {
    Spalte auf einem schmalen Bildschirm ausserhalb - nicht unbequem,
    UNERREICHBAR, weil .sm-wrap eine max-width ohne Ueberlauf hat. */
 .sm-breit { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
-.sm-breit .sm-tbl { margin: 0; min-width: 620px; }
+.sm-breit .sm-tbl { margin: 0; min-width: 760px; }
 .sm-mono { font-family: Consolas, "Courier New", monospace; background: #f0f0f0;
     padding: 1px 4px; border-radius: 3px; font-size: 0.94em; word-break: break-all; }
 .sm-pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; font-size: 0.85em;
@@ -501,10 +536,12 @@ foreach ($bw_fehler as $bw_fm)   { echo '<div class="sm-fehler">' . $bw_fm . '</
 ?>
 
 <!-- Die Reiterleiste steht AUSGESCHRIEBEN da, nicht in einer Schleife
-     erzeugt. Umgeschaltet wird ueber den Server, damit jeder Reiter
-     verlinkbar und die Seite ohne Skript bedienbar bleibt. Ob Leiste,
-     Bereiche und Positivliste dieselben Namen fuehren, zaehlt der Reiter
-     Test nach. -->
+     erzeugt. Jeder Reiter ist eine Adresse und bleibt es: wer ohne Skript
+     kommt, schaltet ueber den Server um (index.php?form=...). Das Skript am
+     Ende der Seite legt sich nur darueber und spart den Seitenwechsel - bis
+     0.9.12 fehlte es, und jeder Reiterklick verwarf, was in einem anderen
+     Reiter noch nicht gespeichert war. Ob Leiste, Bereiche und Positivliste
+     dieselben Namen fuehren, zaehlt der Reiter Test nach. -->
 <div class="sm-tabs">
   <a class="sm-tab<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" data-ziel="tab-settings"
      href="index.php?form=settings"><?php echo bw_t('REITER.EINSTELLUNGEN'); ?></a>
@@ -536,7 +573,7 @@ foreach ($bw_fehler as $bw_fm)   { echo '<div class="sm-fehler">' . $bw_fm . '</
 
 <div class="sm-feld">
   <label><?php echo bw_t('TEXT.L_MS'); ?></label>
-  <select data-role="none" class="sm-auswahl" name="ms_nr">
+  <select data-role="none" name="ms_nr">
 <?php
 $bw_gewaehlt = bw_miniserver_gewaehlt($bw_cfg, $bw_ms);
 foreach ($bw_ms as $bw_m2) { ?>
@@ -800,6 +837,10 @@ foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
 
 <div class="sm-kacheln">
   <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(date('H:i:s', (int) $bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span></div>
+  <!-- letzte_ok wurde bis 0.9.12 an drei Stellen GESCHRIEBEN und an keiner
+       gelesen. Der Unterschied zwischen "zuletzt versucht" und "zuletzt
+       angenommen" ist genau das, was man beim Suchen wissen will. -->
+  <div class="sm-kachel"><b><?= empty($bw_stand['letzte_ok']) ? '&mdash;' : bw_e(date('H:i:s', (int) $bw_stand['letzte_ok'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE_OK'); ?></span></div>
   <div class="sm-kachel"><b><?= (int) (isset($bw_stand['gesendet']) ? $bw_stand['gesendet'] : 0) ?></b><span><?php echo bw_t('TEXT.K_GESENDET'); ?></span></div>
   <div class="sm-kachel"><b><?= (int) (isset($bw_stand['fehler']) ? $bw_stand['fehler'] : 0) ?></b><span><?php echo bw_t('TEXT.K_FEHLER'); ?></span></div>
   <div class="sm-kachel"><b><?= bw_im_fenster($bw_cfg) ? bw_t('TEXT.JA') : bw_t('TEXT.NEIN') ?></b><span><?php echo bw_t('TEXT.K_FENSTER'); ?></span></div>
@@ -831,7 +872,7 @@ foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
         else { echo '<span class="sm-aus">' . bw_e(bw_t('TEXT.FEHLGESCHLAGEN')) . '</span>'; }
       ?></td>
       <td class="sm-mono"><?= (int) $bw_r['code'] ?></td>
-      <td class="sm-mono"><?= bw_e(substr((string) $bw_r['text'], 0, 120)) ?></td>
+      <td class="sm-mono"><?= bw_e(bw_gekuerzt($bw_r['text'], 120)) ?></td>
       <td class="sm-mono"><?= bw_e($bw_r['url']) ?></td></tr>
 <?php } ?>
 </table>
@@ -1153,6 +1194,23 @@ if ($bw_eigen) {
 </div>
 
 </div>
+<script>
+(function () {
+	var reiter = document.querySelectorAll('.sm-tab');
+	function zeige(id) {
+		reiter.forEach(function (r) { r.classList.toggle('sm-active', r.dataset.ziel === id); });
+		document.querySelectorAll('.sm-seite').forEach(function (s) { s.classList.toggle('sm-active', s.id === id); });
+		document.querySelectorAll('input[name="activetab"]').forEach(function (f) { f.value = id; });
+		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
+	}
+	reiter.forEach(function (r) {
+		r.addEventListener('click', function (e) { e.preventDefault(); zeige(r.dataset.ziel); });
+	});
+	// Der Server hat sm-active bereits gesetzt; dieser Aufruf richtet nur die
+	// versteckten activetab-Felder aus und ist ansonsten wirkungslos.
+	zeige(<?= json_encode($bw_tab) ?>);
+})();
+</script>
 <?php
 if ($bw_rahmen) {
     LBWeb::lbfooter();

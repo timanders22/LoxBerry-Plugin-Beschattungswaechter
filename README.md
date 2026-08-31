@@ -1,6 +1,6 @@
-# LoxBerry-Plugin „Beschattungswächter"
+# LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.12
+Version 0.9.13
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -180,6 +180,55 @@ in denen die eine wichtige untergeht.
 
 Reines PHP, keine Nachinstallation, keine Internetverbindung. Das Plugin
 spricht ausschließlich mit dem Miniserver im eigenen Netz.
+
+## Fassung 0.9.13 — was die Durchsicht der 0.9.12 ergeben hat
+
+Vier unabhängige Durchsichten, jede Meldung danach am Code nachgelesen. Was
+wirklich zuschlug, in der Reihenfolge der Schwere:
+
+**Die Sicherungsdatei sagte das Gegenteil ihres Inhalts.** Sie trägt das
+Merkwort — richtig so, siehe oben —, aber vier Stellen behaupteten, sie
+enthalte kein Geheimnis: zwei Kommentare, der lesbare Kopf der Datei selbst
+und der Hinweis am Knopf in beiden Sprachen. Alle vier stammten aus 0.9.10,
+die noch keinen Endpunkt hatte. Jetzt sagen sie, was drinsteht.
+
+**Eine zurückgespielte Sicherung aus 0.9.9 oder 0.9.10 löschte das Merkwort —
+für immer.** Der Schlüssel fehlt in solchen Dateien, also galt die Vorgabe
+(leer), und „da und leer“ heißt an dieser Stelle „bewusst abgeschaltet“: es
+wuchs nie wieder nach, der Endpunkt antwortete dem Miniserver dauerhaft mit
+403, und gemeldet wurde „22 Werte übernommen“. Trägt eine Datei den Schlüssel
+nicht, bleibt das geltende Merkwort jetzt stehen, und die Oberfläche sagt es.
+
+**`OK` stand im ungestörten Betrieb meist auf 0.** Ein Durchgang, der
+außerhalb des Zeitfensters bewusst nichts tat, schrieb `OK=0`. Mit der
+Werkseinstellung waren das 55 von 60 Minuten je Stunde und die ganze Nacht.
+`OK` heißt jetzt „der Durchgang endete ohne Störung“ — und `status/ok` trägt
+dieselbe Beschreibung wie `OK`, weil es derselbe Wert ist.
+
+**Der Abstand war einen Cron-Takt zu lang.** Der Zeitstempel wird nach dem
+Senden gesetzt; der Takt bei genau +60 Minuten sah 3598 Sekunden und
+übersprang. Aus 60 Minuten wurden 65, aus dem kleinsten Abstand (5) wurden
+10. Jetzt gilt ein halber Takt Toleranz. Umgekehrt wird nach einem
+Fehlschlag **früher** wieder angeklopft: solange Fehler in Folge stehen,
+gilt die kürzere Frist (höchstens 15 Minuten) statt des vollen Abstands.
+
+**`aktion=jetzt` übergeht den Hauptschalter nicht mehr.** Zeitfenster und
+Abstand gelten dort weiterhin bewusst nicht — „abgeschaltet“ war nie gemeint.
+
+**Der eingestellte Miniserver wird nicht mehr stillschweigend getauscht.**
+Steht sein Schlüssel nicht mehr in der LoxBerry-Konfiguration, ist das ein
+Fehler mit Protokollzeile — kein Rückfall auf das erste Gerät.
+
+Dazu: das Lebenszeichen kommt wieder nur vom Cron-Lauf (Endpunkt und
+Testknopf schreiben den Zähler nicht mehr fort); `aktion=pruefen` hält die
+zugesagte Viertelstunde jetzt wirklich ein und nimmt dieselbe Sperre wie der
+Lauf; eine Abweisung am Endpunkt wird höchstens stündlich protokolliert
+(2800 Aufrufe ohne Merkwort hatten das Protokoll leergedrängt); der
+HTTP-Code im Stand stammt vom ersten Fehlschlag statt vom letzten Ziel; die
+Reiter schalten wieder ohne Seitenwechsel um; ein weiteres Ziel lässt sich
+durch Leeren wieder ausräumen; unzulässige Werte in der Konfiguration stehen
+im Protokoll statt nur im Reiter Test; und eine Vorlage ohne Merkwort wird
+gar nicht erst ausgeliefert.
 
 ## Fassung 0.9.12 — der Stat-Zwischenspeicher
 Die Protokollkappung (262 144 Byte) stand in

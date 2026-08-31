@@ -215,9 +215,15 @@ function bw_wert_pruefen($schluessel, $wert)
         return false;
     }
     $s = trim((string) $wert);
-    /* Die durchnummerierten Ziele werden wie das erste geprueft. */
+    /* Die durchnummerierten Ziele werden wie das erste geprueft - mit EINER
+       Ausnahme: ihr Befehl darf leer sein. Bis 0.9.12 wies die Liste ihn ab,
+       und damit liess sich ein einmal eingetragenes Ziel nicht mehr
+       ausraeumen: wer Kennung und Befehl von Ziel 2 leerte, bekam bei JEDEM
+       Speichern "Befehl (Ziel 2) wurde abgewiesen" und die Meldung "nur
+       teilweise gespeichert" - fuer einen Vorgang, der genau richtig war.
+       Ziel 1 bleibt streng: es ist das Ziel, das es immer gibt. */
     if (preg_match('/^uuid[2-6]$/', $schluessel)) { $schluessel = 'uuid'; }
-    if (preg_match('/^befehl[2-6]$/', $schluessel)) { $schluessel = 'befehl'; }
+    if (preg_match('/^befehl[2-6]$/', $schluessel)) { $schluessel = 'befehl_weiteres'; }
     switch ($schluessel) {
         case 'aktiv':
         case 'mqtt_ein':
@@ -243,6 +249,10 @@ function bw_wert_pruefen($schluessel, $wert)
             return $s === '' || bw_kennung_sauber($s) !== '';
         case 'befehl':
             return bw_kennung_sauber($s) !== '';
+        case 'befehl_weiteres':
+            /* Leer heisst "dieses Ziel gibt es nicht" - bw_ziele() zaehlt ein
+               Ziel ohnehin nur, wenn Kennung UND Befehl dastehen. */
+            return $s === '' || bw_kennung_sauber($s) !== '';
         case 'von':
         case 'bis':
             return preg_match('/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/', $s) === 1;
@@ -398,6 +408,19 @@ function bw_config($erzeugen = true)
             $fehlend = in_array('aktionstoken', $fehlend, true)
                 ? array('aktionstoken') : array();
         }
+    }
+
+    /* EIN VERWORFENER WERT GEHOERT INS PROTOKOLL, NICHT NUR IN DIE LAGE.
+     *
+     * bw_config_lage() liest bis heute nur der Reiter Test. Cron, Healthcheck
+     * und bw_befund() sehen es nie - eine Datei mit von="99:99" galt damit
+     * still als 06:00, und im kopflosen Betrieb sagte das niemandem etwas.
+     * Ueberschrieben wird der Wert weiterhin nicht: gemeldet ist gemeldet,
+     * und die Vorgabe daraufzuschreiben verdeckte den Fehler erst recht. */
+    if ($verworfen) {
+        bw_log_wenn_neu('verworfen',
+            'In der Konfiguration stehen unzulaessige Werte; es gelten dafuer die '
+            . 'Vorgaben: ' . implode(', ', $verworfen));
     }
 
     bw_config_lage(array('lage' => $lage, 'fehlend' => $fehlend, 'verworfen' => $verworfen));
@@ -633,6 +656,19 @@ function bw_miniserver_gewaehlt(array $c, ?array $alle = null)
                 return $m;
             }
         }
+        /* GESETZT UND UNAUFFINDBAR IST EIN FEHLER, KEINE RUECKFALLEBENE.
+         *
+         * Bis 0.9.12 fiel dieser Fall auf die Stellung zurueck - und stellte
+         * damit genau den Unfall wieder her, gegen den ms_nr in 0.9.11
+         * eingefuehrt wurde: wer in LoxBerry einen Miniserver entfernt,
+         * dessen Waechter spraeche danach still mit einem anderen Geraet.
+         * Die Rueckfallebene gilt weiter fuer den Fall, fuer den es sie gibt:
+         * eine Konfiguration VOR 0.9.11, in der ms_nr leer ist. */
+        bw_log_wenn_neu('ms_nr',
+            'Der eingestellte Miniserver (Schluessel ' . $nr . ') steht nicht mehr in der '
+            . 'LoxBerry-Konfiguration. Es wird NICHT auf ein anderes Geraet ausgewichen - '
+            . 'bitte im Reiter Einstellungen neu waehlen.');
+        return null;
     }
     $i = isset($c['ms']) ? (int) $c['ms'] : 0;
     return isset($alle[$i]) ? $alle[$i] : $alle[0];
@@ -679,6 +715,15 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
                      'text' => 'kein Miniserver in der LoxBerry-Konfiguration', 'url' => '');
     }
     $m = bw_miniserver_gewaehlt($c, $alle);
+    /* Seit 0.9.13 kann die Auswahl null liefern: ein eingestellter, aber
+       nicht mehr vorhandener Schluessel weicht NICHT auf ein anderes Geraet
+       aus. Wer eine Bedingung einzieht, faengt den Fall ab, den sie neu
+       erzeugt - sonst stuende hier ein Zugriff auf null. */
+    if ($m === null) {
+        return array('ok' => false, 'code' => 0,
+                     'text' => 'der eingestellte Miniserver steht nicht mehr in der '
+                             . 'LoxBerry-Konfiguration', 'url' => '');
+    }
     $uuid = bw_kennung_sauber($uuid === null ? (isset($c['uuid']) ? $c['uuid'] : '') : $uuid);
     $befehl = bw_kennung_sauber($befehl === null ? (isset($c['befehl']) ? $c['befehl'] : '') : $befehl);
     if ($uuid === '' || $befehl === '') {
@@ -834,20 +879,30 @@ function bw_fassung()
  * Unterstrich, und bw_sicherung_lesen() UEBERGEHT sie - sonst lehnte diese
  * Linie genau die Datei ab, die sie zwei Zeilen vorher erzeugt hat.
  *
- * ZUM AKTIONSTOKEN: dieses Plugin hat keinen. Es fuehrt keinen Endpunkt im
- * unangemeldeten Bereich, und die Zugangsdaten des Miniservers stehen in der
- * zentralen LoxBerry-Konfiguration, nicht hier. Die Datei traegt also
- * Einstellungen und kein Geheimnis - und der Hinweis am Knopf sagt genau
- * das. Bis 0.9.10 behauptete er das Gegenteil.
+ * ZUM AKTIONSTOKEN: die Datei traegt es, und sie soll es tragen. Wer eine
+ * Sicherung zurueckspielt, will den Waechter wieder so vorfinden, wie er war -
+ * und dazu gehoert das Merkwort, denn ohne dasselbe Merkwort zeigen alle
+ * Adressen in der Loxone-Projektdatei ins Leere.
+ *
+ * DAMIT IST DIE DATEI EIN GEHEIMNIS. Der Kopf sagt es, der Hinweis am Knopf
+ * sagt es, und beide sagen dasselbe. Bis 0.9.12 stand hier das Gegenteil -
+ * ein Satz aus der 0.9.10, die tatsaechlich noch keinen Endpunkt hatte. Wer
+ * ihm folgte, gab mit einer als harmlos angekuendigten Datei die
+ * Schluesselgewalt ueber aktion=jetzt weiter.
+ *
+ * Das Kennwort des Miniservers steht weiterhin NICHT darin: es liegt in der
+ * zentralen LoxBerry-Konfiguration und wird von diesem Plugin weder
+ * angezeigt noch gespeichert.
  */
 function bw_sicherung_bauen()
 {
     $kopf = array(
         '_hinweis' => 'Sicherung der Einstellungen des LoxBerry-Plugins Beschattungswaechter. '
-                    . 'Zum Zurueckspielen im Reiter Einstellungen. Sie enthaelt KEINE '
-                    . 'Zugangsdaten: das Kennwort des Miniservers steht in der zentralen '
-                    . 'LoxBerry-Konfiguration und wird von diesem Plugin weder angezeigt '
-                    . 'noch gespeichert.',
+                    . 'Zum Zurueckspielen im Reiter Einstellungen. ACHTUNG: die Datei '
+                    . 'enthaelt das MERKWORT des unangemeldeten Endpunkts (aktionstoken) '
+                    . 'und ist damit vertraulich - wer sie hat, kann Befehle an den '
+                    . 'Miniserver ausloesen. Das Kennwort des Miniservers steht NICHT '
+                    . 'darin: es liegt in der zentralen LoxBerry-Konfiguration.',
         '_plugin'  => 'beschattungswaechter',
         '_fassung' => bw_fassung(),
         '_stand'   => date('Y-m-d H:i:s'),
@@ -874,18 +929,41 @@ function bw_sicherung_bauen()
  * Eine Sicherung aus 0.9.9 oder 0.9.10 kennt ms_nr noch nicht; der Schluessel
  * fehlt dann und behaelt seine Vorgabe - alte Dateien bleiben lesbar.
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * DAS MERKWORT IST DAVON AUSGENOMMEN, und zwar als einziger Schluessel. Es
+ * ist der einzige, der sich nicht nacherzeugen laesst: seine Vorgabe ist
+ * leer, "da und leer" heisst aber "bewusst abgeschaltet" (bw_token), und
+ * damit waechst es nie wieder nach. Am 29.08.2026 nachgestellt: eine
+ * Sicherung im Format 0.9.10 zurueckgespielt, danach war das Merkwort fort,
+ * die Zweitschrift mit, und der Endpunkt antwortete dem Miniserver dauerhaft
+ * mit 403 - gemeldet wurde "22 Werte uebernommen". Traegt die Datei den
+ * Schluessel nicht, bleibt deshalb das geltende Merkwort stehen, und die
+ * Oberflaeche sagt es.
+ *
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
+ *                  Hinweise[]).
+ * Die Hinweise sind KEINE Beanstandungen: sie verhindern das Zurueckspielen
+ * nicht, sie erklaeren es. Wer nur drei Werte abholt, bekommt weiter genau
+ * das, was er bisher bekam.
  */
 function bw_sicherung_lesen($roh)
 {
     $mangel = array();
+    $hinweise = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(bw_t('TEXT.SICH_KEIN_JSON')), 0);
+        return array(null, array(bw_t('TEXT.SICH_KEIN_JSON')), 0, $hinweise);
     }
     $neu = bw_vorgaben();
     $bekannt = array_keys($neu);
     $anzahl = 0;
+    if (!array_key_exists('aktionstoken', $daten)) {
+        $bisher = bw_config(false);
+        $bisher = isset($bisher['aktionstoken']) ? trim((string) $bisher['aktionstoken']) : '';
+        if ($bisher !== '') {
+            $neu['aktionstoken'] = $bisher;
+            $hinweise[] = bw_t('TEXT.SICH_TOKEN_BEHALTEN');
+        }
+    }
     foreach ($daten as $k => $w) {
         $k = (string) $k;
         if ($k !== '' && $k[0] === '_') {
@@ -905,7 +983,7 @@ function bw_sicherung_lesen($roh)
     if ($anzahl === 0) {
         $mangel[] = bw_t('TEXT.SICH_LEER');
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    return array($mangel ? null : $neu, $mangel, $anzahl, $hinweise);
 }
 
 /**
@@ -1209,10 +1287,29 @@ function bw_lauf_lesen()
     );
 }
 
-function bw_lauf_schreiben($ok)
+/**
+ * Das Lebenszeichen fortschreiben.
+ *
+ * $takt = false fuer alles, was NICHT der Cron ist - den Endpunkt und den
+ * Knopf im Reiter Test. Beide sagen etwas ueber den Erfolg des Befehls, aber
+ * NICHTS darueber, ob der Fuenfminutenlauf noch geht.
+ *
+ * Bis 0.9.12 schrieben sie den ganzen Satz. Loeste Loxone stuendlich
+ * aktion=jetzt aus, liefen Zeitstempel und Zaehler weiter, auch wenn der Cron
+ * seit Tagen nicht mehr startete - und bw_befund() haengt mit "STEHT" an
+ * genau diesem Zeitstempel. Damit beantwortete die Zaehlung die eine Frage
+ * falsch, fuer die es sie gibt.
+ */
+function bw_lauf_schreiben($ok, $takt = true)
 {
     $p = bw_paths();
     $alt = bw_lauf_lesen();
+    if (!$takt) {
+        $neu = array('ts' => (int) $alt['ts'], 'zaehler' => (int) $alt['zaehler'],
+                     'ok' => $ok ? 1 : 0);
+        bw_json_schreiben($p['datadir'] . '/lauf.json', $neu, 0644);
+        return $neu;
+    }
     $z = (int) $alt['zaehler'];
     $z = ($z < 0) ? 0 : (($z + 1) % 1000);
     $neu = array('ts' => time(), 'zaehler' => $z, 'ok' => $ok ? 1 : 0);
@@ -1382,7 +1479,10 @@ function bw_mqtt_themen(?array $c = null)
     }
     $aus[$w . '/status/ts'] = 'FELD.TS';
     $aus[$w . '/status/zaehler'] = 'FELD.ZAEHLER';
-    $aus[$w . '/status/ok'] = 'FELD.LEBT';
+    /* Dasselbe Feld wie OK, deshalb DIESELBE Beschreibung. Bis 0.9.12 stand
+       hier FELD.LEBT ("1 bei jedem Durchgang") - zwei Texte fuer einen Wert,
+       und der zweite war der falsche. */
+    $aus[$w . '/status/ok'] = 'FELD.OK';
     return $aus;
 }
 
@@ -1530,6 +1630,12 @@ function bw_automatiken(array $c, $hoechstens = 40)
         $raeume[$u] = is_array($r) && isset($r['name']) ? (string) $r['name'] : '';
     }
     $m = bw_miniserver_gewaehlt($c);
+    if ($m === null) {
+        /* Kann hier nur eintreten, wenn die Auswahl zwischen dem Holen der
+           Struktur und dieser Zeile weggefallen ist - abgefangen wird es
+           trotzdem, weil ein Zugriff auf null unter 8.x toedlich ist. */
+        return array(0, bw_t('TEXT.KEIN_MS'), array());
+    }
     $kopf = array('Accept: application/json');
     if ($m['user'] !== '') {
         $kopf[] = 'Authorization: Basic ' . base64_encode($m['user'] . ':' . $m['pass']);
@@ -1560,7 +1666,14 @@ function bw_automatiken(array $c, $hoechstens = 40)
         }
         $zeilen[] = array(
             'name'  => (string) (isset($b['name']) ? $b['name'] : $uuid),
-            'raum'  => isset($b['room'], $raeume[$b['room']]) ? $raeume[$b['room']] : '',
+            /* is_scalar() ZUERST. Ist 'room' in der Antwort der Anlage kein
+               Skalar, ist isset($raeume[$b['room']]) unter 7.4 eine Warnung
+               und unter 8.x ein ungefangener TypeError - am Endpunkt also
+               HTTP 500 mit leerem Rumpf, und der Miniserver bekaeme gar
+               nichts zu lesen. */
+            'raum'  => (isset($b['room']) && is_scalar($b['room'])
+                        && isset($raeume[(string) $b['room']]))
+                       ? $raeume[(string) $b['room']] : '',
             'an'    => $an,
             'darf'  => ($erlaubt === null) ? -1 : ((float) $erlaubt >= 0.5 ? 1 : 0),
             'grund' => (string) $grund,
@@ -1917,8 +2030,53 @@ function bw_wirtsname()
 
 /* Der Escape-Helfer gehoert in die Bibliothek, nicht in
  * index.php: sonst steht er dem Endpunkt und jedem weiteren
- * Aufrufer nicht zur Verfuegung (Hausform, REGELN_2). */
+ * Aufrufer nicht zur Verfuegung (Hausform, REGELN_2).
+ *
+ * ENT_SUBSTITUTE ist kein Zierat: ohne dieses Flag gibt htmlspecialchars()
+ * bei ungueltigem UTF-8 die LEERE Zeichenkette zurueck. Gemessen am
+ * 29.08.2026 unter 7.4 wie 8.4: 71 Byte Protokolltext mit einem einzigen
+ * krummen Byte hinein, 0 Byte heraus - die ganze Protokollansicht war leer,
+ * ohne ein Wort. Und das krumme Byte muss nicht von uns stammen: die rohe
+ * Antwort des Miniservers landet im Protokoll. Mit ENT_SUBSTITUTE steht
+ * stattdessen ein Ersatzzeichen da, und der Rest bleibt lesbar. */
 function bw_e($s)
 {
-    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * Ein Formularwert - was kein Text ist, gibt es nicht.
+ *
+ * '?form[]=log' oder 'ms_nr[]=1' macht aus dem Wert ein FELD. Ein (string)
+ * darauf ist unter 7.4 wie 8.4 eine Warnung ("Array to string conversion"),
+ * und sie faellt VOR dem Wachposten und vor beiden Download-Handlern an -
+ * also genau dort, wo eine Ausgabe jede spaetere header()-Zeile wirkungslos
+ * macht. Dieselbe Festlegung wie bw_par() im Endpunkt, nur fuer die
+ * angemeldete Seite.
+ */
+function bw_eingabe(array $quelle, $name)
+{
+    return isset($quelle[$name]) && is_string($quelle[$name]) ? trim($quelle[$name]) : '';
+}
+
+/**
+ * Eine Zeichenkette auf hoechstens $n Zeichen kuerzen - an einer
+ * Zeichengrenze, nicht an einer Bytegrenze.
+ *
+ * substr() schneidet Bytes. Faellt der Schnitt mitten in ein mehrbytiges
+ * Zeichen, ist das Ergebnis kein gueltiges UTF-8 mehr, und die Maskierung
+ * machte daraus bis 0.9.12 eine leere Spalte.
+ */
+function bw_gekuerzt($s, $n)
+{
+    $s = (string) $s;
+    if (function_exists('mb_substr')) {
+        return mb_substr($s, 0, (int) $n, 'UTF-8');
+    }
+    /* Ohne mbstring: an der letzten vollstaendigen Sequenz abschneiden. */
+    $k = substr($s, 0, (int) $n);
+    while ($k !== '' && !preg_match('//u', $k)) {
+        $k = substr($k, 0, -1);
+    }
+    return $k;
 }
