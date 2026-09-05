@@ -1173,8 +1173,19 @@ function bw_wachposten()
  * die Vorlage 20 Eingaenge an, die Zeile lieferte 17 und MQTT 15 - die drei
  * fehlenden waren ausgerechnet die Arbeitszahl.
  *
- * Spalten: bez (Sprachschluessel), einheit, min, max, zeile (0 = nur ueber
- * MQTT und aktion=json).
+ * Spalten: bez (Sprachschluessel der ERKLAERUNG), kurz (Sprachschluessel des
+ * NAMENS), einheit, min, max, zeile (0 = nur ueber MQTT und aktion=json).
+ *
+ * WARUM ZWEI TEXTE JE FELD, seit 0.9.14: der Comment einer Importvorlage
+ * wird in Loxone Config zum ANZEIGENAMEN des Bausteins, nicht zu seiner
+ * Dokumentation. Bis 0.9.13 stand dort die Erklaerung, und die ist ein Satz:
+ * am 05.09.2026 an der eingelesenen Projektdatei gemessen trugen 8 von 14
+ * Bausteinen einen Namen ueber 40 Zeichen, BW OK einen mit 161 - dieselbe
+ * Zahl wie im Anlassfall APC-UPS 1.1.6. Zum Vergleich in derselben Datei:
+ * 100 Bausteine anderer Linien, Namen im Mittel 20 Zeichen lang.
+ *
+ * 'kurz' ist der Name (hoechstens 30 Zeichen), 'bez' bleibt die Erklaerung
+ * fuer die Feldtabelle im Reiter, die Themenliste und die Hilfe.
  *
  * NEUE FELDER WERDEN HINTEN ANGEHAENGT. Loxone sucht den Suchtext woertlich
  * und nimmt den ERSTEN Treffer der Zeile; die Reihenfolge ist damit Teil der
@@ -1183,17 +1194,17 @@ function bw_wachposten()
 function bw_felder()
 {
     return array(
-        'OK'       => array('bez' => 'FELD.OK',       'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
-        'AKTIV'    => array('bez' => 'FELD.AKTIV',    'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
-        'FENSTER'  => array('bez' => 'FELD.FENSTER',  'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
-        'ZIELE'    => array('bez' => 'FELD.ZIELE',    'einheit' => '',  'min' => 0,  'max' => 6,      'zeile' => 1),
-        'GESENDET' => array('bez' => 'FELD.GESENDET', 'einheit' => '',  'min' => 0,  'max' => 999999, 'zeile' => 1),
-        'FEHLER'   => array('bez' => 'FELD.FEHLER',   'einheit' => '',  'min' => 0,  'max' => 9999,   'zeile' => 1),
-        'CODE'     => array('bez' => 'FELD.CODE',     'einheit' => '',  'min' => 0,  'max' => 599,    'zeile' => 1),
-        'ALTER'    => array('bez' => 'FELD.ALTER',    'einheit' => 's', 'min' => -1, 'max' => 999999, 'zeile' => 1),
-        'ZAEHLER'  => array('bez' => 'FELD.ZAEHLER',  'einheit' => '',  'min' => -1, 'max' => 999,    'zeile' => 1),
-        'SCHARF'   => array('bez' => 'FELD.SCHARF',   'einheit' => '',  'min' => -1, 'max' => 99,     'zeile' => 1),
-        'AUTOMATIKEN' => array('bez' => 'FELD.AUTOMATIKEN', 'einheit' => '', 'min' => -1, 'max' => 99, 'zeile' => 1),
+        'OK'       => array('bez' => 'FELD.OK',       'kurz' => 'FELDKURZ.OK',       'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
+        'AKTIV'    => array('bez' => 'FELD.AKTIV',    'kurz' => 'FELDKURZ.AKTIV',    'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
+        'FENSTER'  => array('bez' => 'FELD.FENSTER',  'kurz' => 'FELDKURZ.FENSTER',  'einheit' => '',  'min' => 0,  'max' => 1,      'zeile' => 1),
+        'ZIELE'    => array('bez' => 'FELD.ZIELE',    'kurz' => 'FELDKURZ.ZIELE',    'einheit' => '',  'min' => 0,  'max' => 6,      'zeile' => 1),
+        'GESENDET' => array('bez' => 'FELD.GESENDET', 'kurz' => 'FELDKURZ.GESENDET', 'einheit' => '',  'min' => 0,  'max' => 999999, 'zeile' => 1),
+        'FEHLER'   => array('bez' => 'FELD.FEHLER',   'kurz' => 'FELDKURZ.FEHLER',   'einheit' => '',  'min' => 0,  'max' => 9999,   'zeile' => 1),
+        'CODE'     => array('bez' => 'FELD.CODE',     'kurz' => 'FELDKURZ.CODE',     'einheit' => '',  'min' => 0,  'max' => 599,    'zeile' => 1),
+        'ALTER'    => array('bez' => 'FELD.ALTER',    'kurz' => 'FELDKURZ.ALTER',    'einheit' => 's', 'min' => -1, 'max' => 999999, 'zeile' => 1),
+        'ZAEHLER'  => array('bez' => 'FELD.ZAEHLER',  'kurz' => 'FELDKURZ.ZAEHLER',  'einheit' => '',  'min' => -1, 'max' => 999,    'zeile' => 1),
+        'SCHARF'   => array('bez' => 'FELD.SCHARF',   'kurz' => 'FELDKURZ.SCHARF',   'einheit' => '',  'min' => -1, 'max' => 99,     'zeile' => 1),
+        'AUTOMATIKEN' => array('bez' => 'FELD.AUTOMATIKEN', 'kurz' => 'FELDKURZ.AUTOMATIKEN', 'einheit' => '', 'min' => -1, 'max' => 99, 'zeile' => 1),
     );
 }
 
@@ -1972,15 +1983,18 @@ function bw_vorlage($art, ?array $c = null)
         );
         if (!empty($c['pruefen_ein'])) {
             $cmds[] = array(
-                'title'   => 'BW Automatiken zaehlen',
+                'title'   => 'BW Automatiken zählen',
                 'comment' => bw_t('VORLAGE.C_PRUEFEN'),
                 'on'      => bw_endpunkt_pfad(array('token' => $token, 'aktion' => 'pruefen'), true),
                 'off'     => '',
             );
         }
+        /* Der DATEINAME bleibt ASCII (keine Umlaute, keine Leerzeichen);
+           Titel und Anzeigename sind sichtbarer Text und tragen den Umlaut
+           - Umschrift ist dort ein Textfehler, seit 0.9.14 berichtigt. */
         return array('VQ_Beschattungswaechter.xml', bw_xml_virtual_out(array(
-            'title'   => 'Beschattungswaechter Befehle',
-            'comment' => 'Beschattungswaechter (LoxBerry-Plugin)',
+            'title'   => 'Beschattungswächter Befehle',
+            'comment' => 'Beschattungswächter (LoxBerry-Plugin)',
             'hint'    => $hinweis,
             'address' => $adresse,
         ), $cmds));
@@ -1990,7 +2004,9 @@ function bw_vorlage($art, ?array $c = null)
         if (empty($i['zeile'])) { continue; }
         $cmds[] = array(
             'title'   => 'BW ' . $name,
-            'comment' => bw_t($i['bez']),
+            /* Der NAME, nicht die Erklaerung - Loxone Config macht daraus den
+               Anzeigenamen des Bausteins (Desc), siehe bw_felder(). */
+            'comment' => bw_t($i['kurz']),
             'check'   => bw_check($name),
             'einheit' => $i['einheit'],
             'min'     => $i['min'],
@@ -1998,8 +2014,8 @@ function bw_vorlage($art, ?array $c = null)
         );
     }
     return array('VI_Beschattungswaechter.xml', bw_xml_virtual_in_http(array(
-        'title'   => 'Beschattungswaechter',
-        'comment' => 'Beschattungswaechter (LoxBerry-Plugin)',
+        'title'   => 'Beschattungswächter',
+        'comment' => 'Beschattungswächter (LoxBerry-Plugin)',
         'hint'    => $hinweis,
         'address' => 'http://' . $host . bw_endpunkt_pfad(
                          array('token' => $token, 'aktion' => 'status'), true),

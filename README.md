@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.13
+Version 0.9.14
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -180,6 +180,41 @@ in denen die eine wichtige untergeht.
 
 Reines PHP, keine Nachinstallation, keine Internetverbindung. Das Plugin
 spricht ausschließlich mit dem Miniserver im eigenen Netz.
+
+## Fassung 0.9.14 — die Bausteine heißen jetzt wie Namen
+
+Beim ersten Einlesen der Vorlagen in Loxone Config fiel auf, was an der
+Vorlage nie zu sehen war: **der `Comment` einer Importvorlage wird in Loxone
+zum Anzeigenamen des Bausteins**, nicht zu seiner Dokumentation. Dort stand
+bisher die Erklärung des Feldes — und die ist ein Satz.
+
+An der eingelesenen Projektdatei gemessen (05.09.2026): **8 von 14 Bausteinen
+trugen einen Namen über 40 Zeichen**, `BW OK` einen mit **161**. Zum Vergleich
+in derselben Datei: 100 Bausteine anderer Linien, Anzeigenamen im Mittel
+20 Zeichen lang.
+
+Jedes Feld führt deshalb jetzt **zwei** Texte: einen Namen (`[FELDKURZ]`,
+höchstens 30 Zeichen, geht in die Vorlage) und die Erklärung (`[FELD]`,
+bleibt in der Feldtabelle des Reiters, in der Themenliste und in der Hilfe).
+Der längste Anzeigename ist damit 25 Zeichen lang.
+
+**Nicht betroffen sind die virtuellen Ausgänge.** Dort legt Loxone Config den
+Kommentar in das Feld `Comment` und nicht in den Anzeigenamen — an derselben
+Datei gemessen: 78 Ausgangsbefehle, 11 mit `Comment`, 2 mit `Desc`; bei den
+258 Eingangsbefehlen ist es genau umgekehrt (111 mit `Desc`, keiner mit
+`Comment`). Die beiden Befehlserklärungen bleiben deshalb, wie sie waren.
+
+Dazu tragen die drei sichtbaren Namen den **Umlaut**, wie es der Hausstandard
+für Fließtext verlangt: `Beschattungswächter`, `Beschattungswächter Befehle`,
+`BW Automatiken zählen`. Die Feldnamen (`BW ZAEHLER`) bleiben ASCII — sie sind
+Bezeichner, keine Beschriftung. Die Dateinamen der Vorlagen bleiben ebenfalls
+ASCII.
+
+**Wer die Vorlagen schon eingelesen hat**, bekommt beim erneuten Import neue
+Bausteine neben den alten — Loxone Config meldet das nicht. Die alten
+(`Beschattungswaechter`, `BW …`) gehören dann von Hand gelöscht.
+
+Neu sind außerdem die **Symbole** des Plugins.
 
 ## Fassung 0.9.13 — was die Durchsicht der 0.9.12 ergeben hat
 
