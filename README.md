@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.14
+Version 0.9.15
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
