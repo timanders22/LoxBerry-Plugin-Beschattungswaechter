@@ -844,7 +844,33 @@ function bw_im_fenster(array $c, $zeit = null)
 }
 
 /** Die Fassung aus der Plugin-Datenbank - ueber den ORDNERNAMEN gesucht. */
+/**
+ * Die Fassung - erst aus der Datenbank, dann aus der plugin.cfg.
+ *
+ * NEU 0.9.16. bw_fassung_db() ist die bisherige Funktion, unveraendert; sie
+ * ist auf einer Installation der richtige und einzige Weg (die plugin.cfg
+ * wird dort nirgendwohin installiert). Im AUSPACKORDNER gibt es aber keine
+ * Datenbank, und dort gab sie deshalb eine leere Zeichenkette zurueck - am
+ * Pruefstand gemessen am 07.09.2026. Betroffen war jeder Lauf im
+ * Arbeitsordner.
+ */
 function bw_fassung()
+{
+    $v = bw_fassung_db();
+    if ($v !== '') { return $v; }
+    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg',
+                   dirname(dirname(dirname(__DIR__))) . '/plugin.cfg') as $k) {
+        if (!is_readable($k)) { continue; }
+        $roh = (string) @file_get_contents($k);
+        if (preg_match('/^\s*VERSION\s*=\s*([^\r\n]+)/mi', $roh, $m)) {
+            return trim($m[1], " \t\"'");
+        }
+    }
+    return '';
+}
+
+/** Die Fassung aus der Plugin-Datenbank des LoxBerry - der Weg am Geraet. */
+function bw_fassung_db()
 {
     $p = bw_paths();
     $f = $p['lbhome'] . '/data/system/plugindatabase.json';
