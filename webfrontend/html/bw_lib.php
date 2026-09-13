@@ -1904,9 +1904,24 @@ function bw_melden(?array $c = null)
     if ($alt === $neu) { return false; }
     if (!is_dir($p['datadir'])) { @mkdir($p['datadir'], 0775, true); }
     @file_put_contents($merker, $neu);
-    /* notify_ext() steckt in einer Bibliothek, die nicht jede
-       LoxBerry-Fassung gleich bestueckt - und ein @ hilft gegen
-       "undefined function" nicht. */
+    /* notify_ext() steckt in loxberry_log.php, und die laedt weder der
+       Cron noch die Oberflaeche von selbst - ein @ hilft gegen "undefined
+       function" nicht, deshalb die Wache.
+
+       Bis 0.9.16 fehlte das Nachladen, und die Wache schlug damit IMMER an:
+       am Geraet gemessen (LoxBerry 4.0.0.15, 13.09.2026) ist
+       function_exists('notify_ext') ohne loxberry_log.php false, mit ihr
+       true. Es ging also nie eine Meldung hinaus - still, ohne eine Zeile
+       im Protokoll. Der Satz "nicht jede LoxBerry-Fassung gleich bestueckt"
+       stand hier als Begruendung und war eine Vermutung; gemessen ist das
+       Gegenteil. Bauart aus oc_lib.php des Octopus-Plugins. */
+    /* bw_paths() nennt den Schluessel lbhome, nicht home - mit dem
+       falschen Namen waere $bw_liblog leer und is_file('') false,
+       und die Behebung liefe ins Leere, ohne dass es auffiele. */
+    $bw_liblog = $p['lbhome'] . '/libs/phplib/loxberry_log.php';
+    if (!function_exists('notify_ext') && is_file($bw_liblog)) {
+        @require_once $bw_liblog;
+    }
     if ($stufe <= 4 && function_exists('notify_ext')) {
         @notify_ext(array(
             'PACKAGE' => $p['plugin'], 'NAME' => 'beschattung',
