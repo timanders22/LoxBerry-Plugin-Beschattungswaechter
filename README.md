@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.17
+Version 0.9.18
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -150,6 +150,32 @@ das Abonnement dort von Hand eingetragen werden, ab Fassung 2 trägt der Gateway
 es selbst ein und schaltet das Eingabefeld ab. Der Reiter *MQTT* liest die
 Fassung aus `config/system/general.json` und zeigt genau den Satz, der zur
 gemessenen Fassung gehört — und wenn sie nicht lesbar ist, **beide**.
+
+### Was zurückbehalten wird — und was nicht (ab 0.9.18)
+
+Ein Broker kann den letzten Wert eines Themas festhalten (*retained*). Loxone
+hat ihn dann nach einem Neustart des Miniservers oder des Brokers sofort wieder
+— statt bis zum nächsten Durchgang leer dazustehen.
+
+Das ist nicht für jedes Thema richtig, und die Entscheidung fällt hier **je
+Thema**, nicht je Absendung:
+
+| | Themen | warum |
+|---|---|---|
+| **zurückbehalten** | `ok`, `aktiv`, `fenster`, `ziele`, `gesendet`, `fehler`, `code`, `scharf`, `automatiken`, `status/ok` | Zustände. Nach einem Neustart sollen sie sofort wieder stimmen. |
+| **flüchtig** | `zaehler`, `status/zaehler`, `status/ts` | Das Lebenszeichen. Zurückbehalten stünde es für immer da und sähe aus wie ein laufender Wächter — genau das, was es widerlegen soll. |
+
+Die Spalte *Zurückbehalten* im Reiter *MQTT* fragt dieselbe Funktion, die auch
+sendet; eine zweite Liste wäre eine zweite Wahrheit.
+
+Ein Thema mit **leerem** Wert geht immer flüchtig hinaus, auch wenn es in der
+Tabelle steht: eine leere Nutzlast *löscht* ein zurückbehaltenes Thema im
+Broker.
+
+Das Plugin führt keinen Doppelt-senden-Filter — jeder Durchgang schickt alles.
+Nach dem Update steht der Zustand deshalb beim ersten Lauf im Broker; es ist
+nichts zu tun. Nachsehen lässt es sich mit
+`mosquitto_sub -t '<präfix>/#' --retained-only`.
 
 ## Die Wirkung messen, nicht den Rückgabewert
 

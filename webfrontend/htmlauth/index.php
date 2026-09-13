@@ -728,12 +728,25 @@ if ($bw_gwf >= 2) { ?>
 <h3><?php echo bw_t('MQTT.H_THEMEN'); ?></h3>
 <div class="sm-breit">
 <table class="sm-tbl">
-  <tr><th><?php echo bw_t('MQTT.THEMA'); ?></th><th><?php echo bw_t('MQTT.BEDEUTUNG'); ?></th></tr>
-<?php foreach (bw_mqtt_themen($bw_cfg) as $bw_th2 => $bw_bez) { ?>
-  <tr><td class="sm-mono"><?= bw_e($bw_th2) ?></td><td><?= bw_e(bw_t($bw_bez)) ?></td></tr>
+  <tr><th><?php echo bw_t('MQTT.THEMA'); ?></th><th><?php echo bw_t('MQTT.BEDEUTUNG'); ?></th><th><?php echo bw_t('MQTT.T_RETAIN'); ?></th></tr>
+<?php
+/* Die Spalte fragt bw_mqtt_retain() - DIESELBE Funktion, die auch sendet.
+   Eine zweite Liste in der Oberflaeche waere eine zweite Wahrheit, und sie
+   waere die, die niemand nachmisst.
+
+   bw_mqtt_themen() liefert die Themen MIT Praefix, die Tabelle kennt sie
+   ohne. Abgeschnitten wird genau der Teil, den bw_mqtt_praefix() davor
+   gesetzt hat - nicht am ersten Schraegstrich, denn ein Praefix darf selbst
+   einen tragen ("haus/beschattung"). */
+$bw_praefix2 = bw_mqtt_praefix($bw_cfg['mqtt_thema']);
+foreach (bw_mqtt_themen($bw_cfg) as $bw_th2 => $bw_bez) {
+    $bw_thk = (strpos($bw_th2, $bw_praefix2 . '/') === 0)
+            ? substr($bw_th2, strlen($bw_praefix2) + 1) : $bw_th2; ?>
+  <tr><td class="sm-mono"><?= bw_e($bw_th2) ?></td><td><?= bw_e(bw_t($bw_bez)) ?></td><td><?= bw_e(bw_t(bw_mqtt_retain($bw_thk) ? 'MQTT.RETAIN_JA' : 'MQTT.RETAIN_NEIN')) ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<div class="sm-hinweis"><?php echo bw_t('MQTT.RETAIN_ERKLAERUNG'); ?></div>
 <div class="sm-hinweis"><?php echo bw_t('MQTT.H_LEBEN'); ?></div>
 </div>
 

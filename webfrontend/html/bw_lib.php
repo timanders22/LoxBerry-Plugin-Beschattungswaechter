@@ -1478,6 +1478,78 @@ function bw_mqtt_senden($port, array $zeilen)
     return $n;
 }
 
+
+/**
+ * Geht dieses Thema zurueckbehalten (retained) hinaus?
+ *
+ * Hausstandard seit 03.09.2026 (Regeln/07): **Zustaende** werden retained
+ * gesendet, damit Loxone nach einem Neustart des Miniservers oder des
+ * Brokers sofort den Stand hat; **Messwerte mit Zeitbezug** nicht, damit
+ * kein alter Wert als aktueller erscheint; das **Lebenszeichen** nie.
+ *
+ * Die Entscheidung faellt je THEMA und nicht je Aufruf. Das ist keine
+ * Formsache: bw_mqtt_publish() schickt Zustaende und Lebenszeichen in EINEM
+ * Durchgang hinaus. Wer am Aufruf entscheidet, macht damit entweder das
+ * Lebenszeichen retained (falsch - retained zeigte es fuer immer "lebt")
+ * oder die Zustaende nicht (auch falsch). Aufgelaufen bei ACTiKamera 1.9.19
+ * am 08.09.2026, und genau daran haengt hier die Aufteilung.
+ *
+ * Zurueckbehalten wird, was nach einem Neustart sofort wieder stimmen soll:
+ * die Schalterstellung, das Zeitfenster, die Zahl der Ziele und der
+ * Automatiken, die beiden Zaehlerstaende und die letzte Kennung des
+ * Miniservers.
+ *
+ * Fluechtig bleiben die drei Teile des Lebenszeichens - der umlaufende
+ * ZAEHLER (zweimal: als eigenes Thema und unter status/) und der
+ * Zeitstempel. Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt
+ * den Zeitstempel." Der Bestand haelt es genauso (ACTiKamera 1.9.19:
+ * "online und ts ... gehen nie retained hinaus"; MarstekVenus 1.1.10: "Das
+ * Lebenszeichen und die Zeitstempel: nie").
+ *
+ * ALTER geht ueber MQTT gar nicht hinaus und steht deshalb nicht in der
+ * Tabelle.
+ *
+ * Ein Thema OHNE Eintrag geht fluechtig. Das ist die sichere Richtung: ein
+ * nicht zurueckbehaltener Zustand ist unbequem, ein zurueckbehaltener Wert,
+ * an den niemand gedacht hat, bleibt fuer immer im Broker stehen.
+ */
+function bw_mqtt_retain($thema)
+{
+    static $tab = null;
+    if ($tab === null) {
+        $tab = array();
+        foreach (array(
+            'ok', 'aktiv', 'fenster', 'ziele',
+            'gesendet', 'fehler', 'code',
+            'scharf', 'automatiken',
+            'status/ok',
+        ) as $t) { $tab[$t] = true; }
+    }
+    return isset($tab[(string) $thema]);
+}
+
+/**
+ * Eine fertige UDP-Zeile fuer ein Thema - mit dem richtigen Befehlswort.
+ *
+ * Ueber das MQTT-Gateway V1 heisst der Befehl fuer ein zurueckbehaltenes
+ * Thema "retain" statt "publish" (mqttgateway.pl:293 und :354-357, am Geraet
+ * gemessen). Der UDP-Eingang kennt genau vier Woerter; ein unbekanntes
+ * erstes Wort wuerde als Thema gelesen.
+ *
+ * Ein LEERER Wert geht immer fluechtig hinaus, auch wenn die Tabelle retain
+ * sagt: eine leere Nutzlast LOESCHT ein zurueckbehaltenes Thema im Broker
+ * ("Delete $udptopic from memory because of empty message"). Hier kann das
+ * nur ein CODE ohne Antwort oder ein leergeraeumter Zaehler sein - der Fall
+ * ist selten, aber sein Ergebnis waere ein Thema, das aus Loxone
+ * verschwindet, statt einen Wert zu tragen.
+ */
+function bw_mqtt_zeile($praefix, $thema, $wert)
+{
+    $w = bw_mqtt_wert($wert);
+    $befehl = (bw_mqtt_retain($thema) && $w !== '') ? 'retain' : 'publish';
+    return $befehl . ' ' . $praefix . '/' . $thema . ' ' . $w;
+}
+
 /**
  * Alle Werte veroeffentlichen - und die drei Lebenszeichen dazu.
  *
@@ -1506,12 +1578,12 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
            machte jeden Doppelt-senden-Filter wirkungslos. Der Zeitstempel
            unten sagt dasselbe, und der Miniserver rechnet selbst. */
         if ($k === 'ALTER') { continue; }
-        $zeilen[] = 'publish ' . $w . '/' . strtolower($k) . ' ' . bw_mqtt_wert($v);
+        $zeilen[] = bw_mqtt_zeile($w, strtolower($k), $v);
     }
     $lauf = bw_lauf_lesen();
-    $zeilen[] = 'publish ' . $w . '/status/ts ' . (int) $lauf['ts'];
-    $zeilen[] = 'publish ' . $w . '/status/zaehler ' . (int) $lauf['zaehler'];
-    $zeilen[] = 'publish ' . $w . '/status/ok ' . (int) $lauf['ok'];
+    $zeilen[] = bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']);
+    $zeilen[] = bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']);
+    $zeilen[] = bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']);
     return bw_mqtt_senden($gw['udpport'], $zeilen);
 }
 
@@ -1524,10 +1596,13 @@ function bw_mqtt_lebenszeichen(?array $c = null)
     if ($gw === null || $gw['udpport'] === 0) { return 0; }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
     $lauf = bw_lauf_lesen();
+    /* Dieselbe Tabelle wie oben - status/ok ist auch hier ein Zustand und
+       geht auch hier zurueckbehalten hinaus. Wer die Entscheidung am AUFRUF
+       traefe, haette sie hier anders getroffen als vier Zeilen weiter oben. */
     return bw_mqtt_senden($gw['udpport'], array(
-        'publish ' . $w . '/status/ts ' . (int) $lauf['ts'],
-        'publish ' . $w . '/status/zaehler ' . (int) $lauf['zaehler'],
-        'publish ' . $w . '/status/ok ' . (int) $lauf['ok'],
+        bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']),
+        bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']),
+        bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']),
     ));
 }
 
