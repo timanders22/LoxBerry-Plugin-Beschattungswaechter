@@ -1499,9 +1499,13 @@ function bw_mqtt_senden($port, array $zeilen)
  * Automatiken, die beiden Zaehlerstaende und die letzte Kennung des
  * Miniservers.
  *
- * Fluechtig bleiben die drei Teile des Lebenszeichens - der umlaufende
- * ZAEHLER (zweimal: als eigenes Thema und unter status/) und der
- * Zeitstempel. Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt
+ * Fluechtig bleiben die Teile des Lebenszeichens - der umlaufende
+ * ZAEHLER (zweimal: als eigenes Thema und unter status/), der Zeitstempel
+ * und status/ok. status/ok ging in 0.9.18 retained hinaus;
+ * seit 0.9.19 nicht mehr (Entscheidung des Hausherrn vom 17.09.2026: das
+ * Lebenszeichen nie retained, auch status/ok). Zurueckbehalten stuende nach
+ * dem Ende der Cron-Laeufe fuer immer "1" im Broker. Den Altwert raeumt
+ * bw_mqtt_altlast_abraeumen() einmal ab. Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt
  * den Zeitstempel." Der Bestand haelt es genauso (ACTiKamera 1.9.19:
  * "online und ts ... gehen nie retained hinaus"; MarstekVenus 1.1.10: "Das
  * Lebenszeichen und die Zeitstempel: nie").
@@ -1522,7 +1526,6 @@ function bw_mqtt_retain($thema)
             'ok', 'aktiv', 'fenster', 'ziele',
             'gesendet', 'fehler', 'code',
             'scharf', 'automatiken',
-            'status/ok',
         ) as $t) { $tab[$t] = true; }
     }
     return isset($tab[(string) $thema]);
@@ -1580,11 +1583,39 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
         if ($k === 'ALTER') { continue; }
         $zeilen[] = bw_mqtt_zeile($w, strtolower($k), $v);
     }
+    bw_mqtt_altlast_abraeumen($gw['udpport'], $w);
     $lauf = bw_lauf_lesen();
     $zeilen[] = bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']);
     $zeilen[] = bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']);
     $zeilen[] = bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']);
     return bw_mqtt_senden($gw['udpport'], $zeilen);
+}
+
+/**
+ * Den zurueckbehaltenen Wert von status/ok aus 0.9.18 einmal loeschen.
+ *
+ * Ein spaeteres publish ersetzt einen retained Wert NICHT - er bliebe fuer
+ * immer im Broker. Geloescht wird mit einer leeren Nutzlast und dem
+ * Befehlswort retain (am Broker belegt 14.09.2026, Regeln/07). VOR den
+ * frischen Werten: die leere Nachricht geht auch an die Abonnenten, und der
+ * frische Wert folgt im selben Durchgang.
+ *
+ * Der Merker liegt als eigene Datei im Datenordner, nicht in lauf.json:
+ * bw_lauf_schreiben() schreibt jene Datei bei jedem Lauf mit genau drei
+ * Schluesseln neu. Der Installer raeumt den Datenordner bei jedem Upgrade ab
+ * - dann wird eben noch einmal geloescht; fuer ein nicht zurueckbehaltenes
+ * Thema ist das wirkungslos.
+ */
+function bw_mqtt_altlast_abraeumen($port, $praefix)
+{
+    $p = bw_paths();
+    $merker = $p['datadir'] . '/retain_status_ok_geloescht';
+    if (is_file($merker)) { return false; }
+    if (bw_mqtt_senden($port, array('retain ' . $praefix . '/status/ok ')) !== 1) { return false; }
+    @file_put_contents($merker, date('c') . "\n");
+    bw_log('MQTT: zurueckbehaltenen Wert von ' . $praefix . '/status/ok aus 0.9.18 geloescht '
+        . '- das Lebenszeichen geht seit 0.9.19 nicht mehr retained hinaus.');
+    return true;
 }
 
 /** NUR die drei Lebenszeichen - fuer einen Lauf, der sonst nichts zu sagen hat. */
@@ -1595,10 +1626,11 @@ function bw_mqtt_lebenszeichen(?array $c = null)
     $gw = bw_mqtt_gateway_info();
     if ($gw === null || $gw['udpport'] === 0) { return 0; }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    bw_mqtt_altlast_abraeumen($gw['udpport'], $w);
     $lauf = bw_lauf_lesen();
-    /* Dieselbe Tabelle wie oben - status/ok ist auch hier ein Zustand und
-       geht auch hier zurueckbehalten hinaus. Wer die Entscheidung am AUFRUF
-       traefe, haette sie hier anders getroffen als vier Zeilen weiter oben. */
+    /* Dieselbe Tabelle wie oben - seit 0.9.19 geht status/ok auch hier
+       fluechtig hinaus. Wer die Entscheidung am AUFRUF traefe, haette sie
+       hier anders treffen koennen als vier Zeilen weiter oben. */
     return bw_mqtt_senden($gw['udpport'], array(
         bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']),
         bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']),

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.18
+Version 0.9.19
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -162,8 +162,15 @@ Thema**, nicht je Absendung:
 
 | | Themen | warum |
 |---|---|---|
-| **zurückbehalten** | `ok`, `aktiv`, `fenster`, `ziele`, `gesendet`, `fehler`, `code`, `scharf`, `automatiken`, `status/ok` | Zustände. Nach einem Neustart sollen sie sofort wieder stimmen. |
-| **flüchtig** | `zaehler`, `status/zaehler`, `status/ts` | Das Lebenszeichen. Zurückbehalten stünde es für immer da und sähe aus wie ein laufender Wächter — genau das, was es widerlegen soll. |
+| **zurückbehalten** | `ok`, `aktiv`, `fenster`, `ziele`, `gesendet`, `fehler`, `code`, `scharf`, `automatiken` | Zustände. Nach einem Neustart sollen sie sofort wieder stimmen. |
+| **flüchtig** | `zaehler`, `status/zaehler`, `status/ts`, `status/ok` | Das Lebenszeichen. Zurückbehalten stünde es für immer da und sähe aus wie ein laufender Wächter — genau das, was es widerlegen soll. |
+
+**Seit 0.9.19** geht auch `status/ok` flüchtig hinaus; in 0.9.18 war es
+zurückbehalten. Nach dem Ende der Cron-Läufe stand damit für immer `1` im
+Broker. Den alten Wert löscht der Wächter beim ersten Senden nach dem Update
+einmal (Protokollzeile „zurückbehaltenen Wert … gelöscht“). Wer in Loxone
+auf `status/ok` hört, bekommt den Wert nach einem Neustart des Miniservers
+mit dem nächsten Durchgang, nicht mehr sofort aus dem Broker.
 
 Die Spalte *Zurückbehalten* im Reiter *MQTT* fragt dieselbe Funktion, die auch
 sendet; eine zweite Liste wäre eine zweite Wahrheit.
