@@ -10,10 +10,55 @@ ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-beschattungswaechter}"
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
-    BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
+# Die LoxBerry-Wurzel. Der Installer uebergibt sie als fuenftes Argument;
+# $LBHOMEDIR gilt nur mit config/plugins UND data/plugins darunter. Sonst wird
+# vom eigenen Ablageort aufwaerts gesucht, und Wurzel ist nur, was
+# config/plugins, data/plugins UND config/system/general.json traegt
+# (Regeln/06). Ohne Wurzel wird gewarnt und nichts getan.
+#
+# Bis 0.9.19 stand hier ein fester Rueckfall ohne jede Pruefung ($SELF/../..,
+# in uninstall/uninstall $SELF/../../.. und der Ordnername aus $SELF/..). Aus
+# einem fremden Baum heraus sicherte preupgrade.sh dessen Konfiguration ueber
+# dessen Sicherung, postinstall.sh legte dort Ordner an, postupgrade.sh
+# loeschte dort Dateien, und uninstall/uninstall rechnete sich den Ordnernamen
+# "system" aus (in WSL gemessen, Pruefung-Beschattungswaechter-0.9.20, Faelle
+# W1-W6).
+bw_wurzel_suchen() {
+    bw_v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    bw_i=0
+    while [ -n "$bw_v" ] && [ "$bw_v" != "/" ] && [ $bw_i -lt 8 ]; do
+        if [ -d "$bw_v/config/plugins" ] && [ -d "$bw_v/data/plugins" ] \
+           && [ -f "$bw_v/config/system/general.json" ]; then
+            echo "$bw_v"; return 0
+        fi
+        bw_v=$(dirname "$bw_v"); bw_i=$((bw_i + 1))
+    done
+    return 1
+}
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(bw_wurzel_suchen) || BASE=""
+fi
+if [ -z "$BASE" ]; then
+    echo "<WARNING> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: weder als"
+    echo "<WARNING> fuenftes Argument noch in \$LBHOMEDIR, und oberhalb dieses Skripts"
+    echo "<WARNING> traegt kein Verzeichnis config/plugins, data/plugins und"
+    echo "<WARNING> config/system/general.json. Es wurde nichts entfernt."
+    echo "<WARNING> Liegen bleiben kann config/plugins/$PFOLDER.backup.json mit dem Merkwort des Endpunkts."
+    exit 1
+fi
+# Die zurueckbehaltenen MQTT-Themen der Linie (Regeln/07, Abschnitt 3: die
+# Deinstallation raeumt sie ab). Bis 0.9.19 blieben aktiv, ziele, gesendet,
+# scharf, automatiken - und aus 0.9.18/0.9.19 ok, fenster, fehler, code und
+# status/ok - nach dem Entfernen fuer immer im Broker und kamen nach jedem
+# Neustart von Broker oder Gateway wieder am Miniserver an (Fall R14). Der
+# einzige Weg der Linie ist der UDP-Eingang des Gateways: ohne Bestaetigung
+# und ohne Nachlesen; bw_mqtt_leeren() schickt deshalb drei Runden. VOR dem
+# Loeschen der Ordner, denn Praefix und Port stehen in der Konfiguration.
+LAUF="$BASE/bin/plugins/$PFOLDER/bw_lauf.php"
+if [ -f "$LAUF" ] && command -v php >/dev/null 2>&1; then
+    LBHOMEDIR="$BASE" LBPPLUGINDIR="$PFOLDER" php "$LAUF" --mqtt-leeren 2>&1
+else
+    echo "<INFO> bw_lauf.php oder php fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
 fi
 ENTFERNT=0
 if [ -n "$BASE" ] && [ -f "$BASE/config/plugins/$PFOLDER.backup.json" ]; then

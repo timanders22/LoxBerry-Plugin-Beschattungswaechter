@@ -32,7 +32,8 @@
  * Die LoxBerry-Wurzel finden, ohne einen Systempfad hinzuschreiben.
  *
  * Aufwaerts suchen, bis ein Verzeichnis gefunden ist, das nachweislich eine
- * LoxBerry-Wurzel IST: es traegt config/plugins UND data/plugins. Eine feste
+ * LoxBerry-Wurzel IST: es traegt config/plugins, data/plugins UND
+ * config/system/general.json (Regeln/06). Eine feste
  * Zahl ".." waere nur die naechste Wette (installiert liegt diese Datei drei
  * Ebenen unter der Wurzel, im entpackten Archiv zwei), und ein
  * ausgeschriebener Systempfad ist ein harter Pfad - den beanstandet der
@@ -42,7 +43,13 @@ function bw_wurzel_suchen()
 {
     $v = __DIR__;
     for ($i = 0; $i < 8 && $v !== '' && $v !== dirname($v); $i++) {
-        if (is_dir($v . '/config/plugins') && is_dir($v . '/data/plugins')) {
+        /* general.json ist die entscheidende Bedingung: die beiden Ordner
+           allein hinterlaesst jeder Pruefstand. Bis 0.9.19 genuegten sie -
+           gemessen am 25.09.2026 in WSL (Pruefung-Beschattungswaechter-0.9.20,
+           Fall W9): die Bibliothek, abgelegt wie installiert in einem fremden
+           Baum ohne general.json, nahm diesen Baum als Wurzel. */
+        if (is_dir($v . '/config/plugins') && is_dir($v . '/data/plugins')
+            && is_file($v . '/config/system/general.json')) {
             return $v;
         }
         $v = dirname($v);
@@ -50,28 +57,91 @@ function bw_wurzel_suchen()
     return '';
 }
 
-/** Pfade des Plugins. LBP*-Umgebungsvariablen setzt LoxBerry. */
+/**
+ * Die Wurzel: erst LBHOMEDIR, dann die Suche - und danach nichts mehr.
+ *
+ * Ein gesetztes LBHOMEDIR gilt mit config/plugins UND data/plugins darunter;
+ * general.json wird dort nicht verlangt, damit die Attrappen der Pruefkette
+ * (Werkzeuge/lb) weiter tragen. Rueckgabe '' heisst "keine Wurzel". Bauart
+ * tb_lbhome() aus Spotpreis-Tibber 0.9.19.
+ */
+function bw_lbhome()
+{
+    $h = getenv('LBHOMEDIR');
+    if (is_string($h) && $h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+        return rtrim($h, '/');
+    }
+    return bw_wurzel_suchen();
+}
+
+/**
+ * Pfade des Plugins. LBP*-Umgebungsvariablen setzt LoxBerry.
+ *
+ * ARCHIVMODUS. Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek dort
+ * installiert liegt (<Wurzel>/webfrontend/html/plugins/<ordner>, physisch
+ * verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich nennt
+ * ($LBHOMEDIR und $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge mit ihrer
+ * Attrappe). Sonst ist das ein ausgepacktes Archiv oder ein Pruefordner, und
+ * alles bleibt in dessen eigenem Ordner. Bis 0.9.19 nahm ein Archiv die
+ * gefundene Wurzel bzw. $LBHOMEDIR (am Geraet steht es in /etc/environment)
+ * und den festen Namen: bw_lauf.php --jetzt schickte den Befehl an den
+ * Miniserver der Anlage und schrieb deren stand.json, der Endpunkt nahm deren
+ * Merkwort an, die Oberflaeche schrieb deren Konfiguration (in WSL gemessen,
+ * Pruefung-Beschattungswaechter-0.9.20, Faelle A1-A5). Bauart tb_paths() aus
+ * Spotpreis-Tibber 0.9.19.
+ *
+ * OHNE WURZEL wird neben dem Plugin gearbeitet, nie an der Laufwerkswurzel:
+ * bis 0.9.19 lauteten die Pfade dann /config/plugins/..., /data/plugins/...
+ * und /log/plugins/... (Fall T6). bin/bw_lauf.php steigt in beiden Faellen
+ * vorher aus (bw_keine_wurzel_abbruch()); dieser Zweig bedient Oberflaeche,
+ * Healthcheck und Endpunkt auf einem Bau-Rechner.
+ */
 function bw_paths()
 {
     static $p = null;
     if ($p !== null) {
         return $p;
     }
-    $ordner = getenv('LBPPLUGINDIR');
-    if ($ordner === false || $ordner === '') {
-        /* Der Ordnername ist die LETZTE Stufe des Pfades - sowohl
-           webfrontend/html/plugins/<ordner>/ als auch bin/plugins/<ordner>/
-           enden darauf. Eine Stufe zu weit oben ergaebe "plugins". */
-        $ordner = basename(__DIR__);
-    }
+    /* Von LBPPLUGINDIR zaehlt nur der letzte Pfadteil, und die Namen, die
+       nachweislich kein Pluginordner sind, gelten auch dort nicht.
+       Der Ordnername ist sonst die LETZTE Stufe des Pfades - sowohl
+       webfrontend/html/plugins/<ordner>/ als auch bin/plugins/<ordner>/
+       enden darauf. Eine Stufe zu weit oben ergaebe "plugins". */
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    $lbp_gilt = ($lbp !== '' && !in_array($lbp, array('.', '/', 'html', 'htmlauth', 'plugins', 'bin'), true));
+    $ordner = $lbp_gilt ? $lbp : basename(__DIR__);
     if ($ordner === '' || $ordner === '.' || $ordner === '/'
         || $ordner === 'html' || $ordner === 'htmlauth' || $ordner === 'plugins'
         || $ordner === 'bin') {
         $ordner = 'beschattungswaechter';
     }
-    $lb = getenv('LBHOMEDIR');
-    if ($lb === false || $lb === '') {
-        $lb = bw_wurzel_suchen();
+    $lb = bw_lbhome();
+    $gefunden = $lb;
+    if ($lb !== '') {
+        $soll = @realpath($lb . '/webfrontend/html/plugins/' . basename(__DIR__));
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $ausdruecklich = $lbp_gilt && $lb === rtrim((string) getenv('LBHOMEDIR'), '/');
+        if (!$installiert && !$ausdruecklich) {
+            $lb = '';
+        }
+    }
+    if ($lb === '') {
+        $basis = dirname(dirname(__DIR__));
+        $p = array(
+            'plugin'  => $ordner,
+            'lbhome'  => '',
+            'config'  => $basis . '/config',
+            'log'     => $basis . '/log',
+            'datadir' => $basis . '/data',
+            /* Die gefundene Wurzel, wenn diese Datei NICHT darin installiert
+               liegt (Archivmodus) - fuer die Meldung; sonst leer. */
+            'archiv'  => $gefunden,
+        );
+        $p['cfgdatei'] = $p['config'] . '/beschattung.json';
+        $p['sicherung'] = $p['config'] . '/beschattung.backup.json';
+        $p['logdatei'] = $p['log'] . '/beschattung.log';
+        return $p;
     }
     $cfg = getenv('LBPCONFIGDIR');
     $log = getenv('LBPLOGDIR');
@@ -82,6 +152,7 @@ function bw_paths()
         'config' => ($cfg !== false && $cfg !== '') ? $cfg : $lb . '/config/plugins/' . $ordner,
         'log'    => ($log !== false && $log !== '') ? $log : $lb . '/log/plugins/' . $ordner,
         'datadir'   => ($dat !== false && $dat !== '') ? $dat : $lb . '/data/plugins/' . $ordner,
+        'archiv' => '',
     );
     $p['cfgdatei'] = $p['config'] . '/beschattung.json';
     /* Die Zweitschrift liegt NEBEN dem Konfigordner, nicht darin: der
@@ -91,6 +162,33 @@ function bw_paths()
     $p['sicherung'] = $lb . '/config/plugins/' . $ordner . '.backup.json';
     $p['logdatei'] = $p['log'] . '/beschattung.log';
     return $p;
+}
+
+/**
+ * Fuer bin/bw_lauf.php: ohne Wurzel oder aus einem Archiv heraus nichts tun,
+ * eine Meldung auf stderr, Rueckgabewert 1 - VOR allem, was sendet oder
+ * schreibt. Bauart tb_keine_wurzel_abbruch() aus Spotpreis-Tibber 0.9.19.
+ */
+function bw_keine_wurzel_abbruch($programm)
+{
+    $p = bw_paths();
+    if ($p['lbhome'] !== '') {
+        return;
+    }
+    if ($p['archiv'] !== '') {
+        fwrite(STDERR, $programm . ': Diese Datei liegt nicht in der Installation unter '
+            . $p['archiv'] . "\n"
+            . '(ausgepacktes Archiv oder Pruefordner). Damit nichts in die Anlage kommt,' . "\n"
+            . 'wurde nichts gesendet und nichts geschrieben.' . "\n"
+            . 'Abhilfe: das Programm aus ' . $p['archiv'] . '/bin/plugins/<ordner> aufrufen' . "\n"
+            . 'oder LBHOMEDIR und LBPPLUGINDIR ausdruecklich setzen.' . "\n");
+        exit(1);
+    }
+    fwrite(STDERR, $programm . ': Es wurde kein LoxBerry-Wurzelverzeichnis gefunden.' . "\n"
+        . '$LBHOMEDIR ist nicht gesetzt, und oberhalb von ' . __DIR__ . ' traegt kein' . "\n"
+        . 'Verzeichnis config/plugins, data/plugins und config/system/general.json.' . "\n"
+        . 'Es wurde nichts gesendet und nichts geschrieben.' . "\n");
+    exit(1);
 }
 
 /**
@@ -299,6 +397,36 @@ function bw_config_lage($setzen = null)
 }
 
 /**
+ * Traegt ein Stand INHALT? Eine Kennung (uuid) oder ein Merkwort
+ * (aktionstoken) in der Form, die die Positivliste zulaesst.
+ *
+ * Danach entscheiden die Selbstheilung, das Nachziehen der Zweitschrift und
+ * die Hakenskripte (bw_hat_inhalt() in preupgrade.sh und postinstall.sh
+ * prueft dasselbe) - nie nach Groesse oder "nicht leer" (Hausregel,
+ * Bestand-2026-09-18/AUFTRAG_gemeinsam.md, "Selbstheilung nach Inhalt").
+ */
+function bw_hat_inhalt($d)
+{
+    if (!is_array($d)) {
+        return false;
+    }
+    $u = (isset($d['uuid']) && is_scalar($d['uuid'])) ? bw_kennung_sauber((string) $d['uuid']) : '';
+    $t = (isset($d['aktionstoken']) && is_string($d['aktionstoken'])) ? trim($d['aktionstoken']) : '';
+    return $u !== '' || preg_match('/^[0-9a-f]{16,64}$/', $t) === 1;
+}
+
+/** Die Zweitschrift - nur, wenn sie lesbar ist UND Inhalt traegt, sonst null. */
+function bw_zweitschrift_mit_inhalt()
+{
+    $p = bw_paths();
+    if (!is_file($p['sicherung'])) {
+        return null;
+    }
+    $zs = json_decode((string) @file_get_contents($p['sicherung']), true);
+    return bw_hat_inhalt($zs) ? $zs : null;
+}
+
+/**
  * Die Konfiguration lesen.
  *
  * $erzeugen = false liest NUR. Der Schalter ist da, damit ein kuenftiger
@@ -336,9 +464,11 @@ function bw_config($erzeugen = true)
                 bw_log_wenn_neu('kaputt',
                     'Die Konfiguration war unlesbar und liegt jetzt als beschattung.json.kaputt daneben.');
             }
-            $zs = is_file($p['sicherung'])
-                ? json_decode((string) @file_get_contents($p['sicherung']), true) : null;
-            if (is_array($zs) && $zs) {
+            /* Geheilt wird nur aus einer Zweitschrift, die selbst Inhalt
+               traegt. Bis 0.9.19 genuegte jedes nicht leere Feld - eine
+               Zweitschrift {"aktiv":1} wurde zur Konfiguration (Fall Z3). */
+            $zs = bw_zweitschrift_mit_inhalt();
+            if ($zs !== null) {
                 $d = $zs;
                 $lage = 'aus_zweitschrift';
                 if ($erzeugen) {
@@ -356,6 +486,30 @@ function bw_config($erzeugen = true)
             $lage = 'leer';
         } else {
             $lage = 'ok';
+        }
+    }
+
+    /* DIE DATEI FEHLT ODER IST LEER, UND DIE ZWEITSCHRIFT TRAEGT INHALT:
+     * zurueckschreiben, einmal melden.
+     *
+     * Bis 0.9.19 heilte nur eine beschaedigte Datei. Fehlte sie, galt die
+     * Werkseinstellung - und genau das ist der Zustand in der Luecke eines
+     * Updates: purge_installation hat config/plugins/<ordner>/ geloescht,
+     * postinstall.sh laeuft erst spaeter (Regeln/06), und der Fuenfminutentakt
+     * fand "kein Ziel eingerichtet" und meldete eine Stoerung an das
+     * Benachrichtigungszentrum (in WSL gemessen,
+     * Pruefung-Beschattungswaechter-0.9.20, Fall Z13). Die Zweitschrift ist
+     * in dem Augenblick die Sicherung, die preupgrade.sh gerade geschrieben
+     * hat. $erzeugen = false liest sie nur. */
+    if ($lage === 'neu' || $lage === 'leer') {
+        $zs = bw_zweitschrift_mit_inhalt();
+        if ($zs !== null) {
+            $d = $zs;
+            $lage = 'aus_zweitschrift';
+            if ($erzeugen && bw_json_schreiben($p['cfgdatei'], $zs)) {
+                bw_log_wenn_neu('geheilt',
+                    'Konfiguration aus der Zweitschrift wiederhergestellt (die Datei fehlte oder war leer).');
+            }
         }
     }
 
@@ -503,6 +657,16 @@ function bw_config_speichern(array $c, $zweitschrift = true)
     }
     $alt = is_file($p['sicherung'])
         ? json_decode((string) @file_get_contents($p['sicherung']), true) : null;
+    /* Auch nach INHALT, nicht nur nach der Kennung: ein Stand ohne Kennung UND
+       ohne Merkwort ueberschreibt keine Zweitschrift, die eines davon traegt.
+       Bis 0.9.19 ging dabei das Merkwort einer Anlage ohne Kennung verloren
+       (Fall Z4). */
+    if (!bw_hat_inhalt($c) && bw_hat_inhalt($alt)) {
+        bw_log_wenn_neu('zweitschrift',
+            'Die Zweitschrift wurde NICHT ueberschrieben: der zu schreibende Stand traegt '
+            . 'weder Kennung noch Merkwort, die vorhandene schon.');
+        return true;
+    }
     $altkennung = (is_array($alt) && isset($alt['uuid'])) ? trim((string) $alt['uuid']) : '';
     $neukennung = isset($c['uuid']) ? trim((string) $c['uuid']) : '';
     if ($neukennung === '' && $altkennung !== '') {
@@ -545,7 +709,7 @@ function bw_log_wenn_neu($merker, $text, $sekunden = 3600)
 {
     $p = bw_paths();
     $f = $p['datadir'] . '/.meld_' . preg_replace('/[^a-z0-9_]/', '', strtolower($merker));
-    if (!is_file($p['logdatei'])) {
+    if (!is_file($p['logdatei']) && is_file($f)) {
         @unlink($f);
     }
     if (is_file($f) && (time() - (int) @filemtime($f)) < $sekunden) {
@@ -858,8 +1022,10 @@ function bw_fassung()
 {
     $v = bw_fassung_db();
     if ($v !== '') { return $v; }
-    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg',
-                   dirname(dirname(dirname(__DIR__))) . '/plugin.cfg') as $k) {
+    /* Nur die plugin.cfg des eigenen Archivs. Der zweite Kandidat eine Stufe
+       hoeher lag installiert unter webfrontend/ und fand nie etwas; aus einem
+       Archiv unter / war er die plugin.cfg der Laufwerkswurzel (Fall T11). */
+    foreach (array(dirname(dirname(__DIR__)) . '/plugin.cfg') as $k) {
         if (!is_readable($k)) { continue; }
         $roh = (string) @file_get_contents($k);
         if (preg_match('/^\s*VERSION\s*=\s*([^\r\n]+)/mi', $roh, $m)) {
@@ -1074,8 +1240,14 @@ function bw_sprachordner()
     $lb = bw_paths()['lbhome'];
     if ($lb !== '') {
         $kand[] = rtrim($lb, '/\\') . '/templates/plugins/' . basename(__DIR__);
+        $kand[] = rtrim($lb, '/\\') . '/templates/plugins/' . bw_paths()['plugin'];
     }
-    $kand[] = dirname(dirname(dirname(__DIR__))) . '/templates/plugins/' . basename(__DIR__);
+    /* Ohne Wurzel nur noch das eigene Archiv. Bis 0.9.19 stand hier ein
+       Kandidat drei Stufen ueber dieser Datei - aus einem Archiv unter / war
+       das /templates/plugins/html ab der Laufwerkswurzel, und was dort lag,
+       uebersetzte die Oberflaeche (in WSL gemessen,
+       Pruefung-Beschattungswaechter-0.9.20, Fall T1). Installiert lag er
+       unter webfrontend/ und fand nie etwas. */
     $kand[] = dirname(dirname(__DIR__)) . '/templates';
     foreach ($kand as $k) {
         if (is_dir($k . '/lang')) {
@@ -1494,21 +1666,28 @@ function bw_mqtt_senden($port, array $zeilen)
  * oder die Zustaende nicht (auch falsch). Aufgelaufen bei ACTiKamera 1.9.19
  * am 08.09.2026, und genau daran haengt hier die Aufteilung.
  *
- * Zurueckbehalten wird, was nach einem Neustart sofort wieder stimmen soll:
- * die Schalterstellung, das Zeitfenster, die Zahl der Ziele und der
- * Automatiken, die beiden Zaehlerstaende und die letzte Kennung des
- * Miniservers.
+ * Zurueckbehalten wird, was nach einem Neustart sofort wieder stimmen soll
+ * UND nach dem Ende der Laeufe wahr bleibt: die Schalterstellung (aktiv), die
+ * Zahl der Ziele, der Zaehler der gesendeten Befehle seit dem letzten Update
+ * (ein Verlaufszaehler - er bleibt wahr, auch wenn der Dienst stirbt;
+ * Entscheidung vom 24.09.2026) und die am Miniserver gemessenen Automatiken
+ * (scharf, automatiken - eine Aussage ueber die Anlage, nicht ueber den
+ * Dienst).
  *
- * Fluechtig bleiben die Teile des Lebenszeichens - der umlaufende
- * ZAEHLER (zweimal: als eigenes Thema und unter status/), der Zeitstempel
- * und status/ok. status/ok ging in 0.9.18 retained hinaus;
- * seit 0.9.19 nicht mehr (Entscheidung des Hausherrn vom 17.09.2026: das
- * Lebenszeichen nie retained, auch status/ok). Zurueckbehalten stuende nach
- * dem Ende der Cron-Laeufe fuer immer "1" im Broker. Den Altwert raeumt
- * bw_mqtt_altlast_abraeumen() einmal ab. Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt
- * den Zeitstempel." Der Bestand haelt es genauso (ACTiKamera 1.9.19:
- * "online und ts ... gehen nie retained hinaus"; MarstekVenus 1.1.10: "Das
- * Lebenszeichen und die Zeitstempel: nie").
+ * Fluechtig gehen seit 0.9.20 auch ok, fehler, code und fenster (Regeln/07,
+ * Abschnitt 3, Entscheidungen vom 18., 19. und 24.09.2026):
+ *   ok, fehler, code  sagen, was der DIENST ueber sich selbst feststellt:
+ *                     Durchgang ohne Stoerung, Fehler in Folge, HTTP-Antwort
+ *                     auf den eigenen Befehl. Stirbt der Dienst, stuenden sie
+ *                     zurueckbehalten fuer immer als "in Ordnung" da.
+ *   fenster           wird allein durch die Uhr falsch: ein Vollversand geht
+ *                     nur im Zeitfenster hinaus, zurueckbehalten stand also
+ *                     nachts "1" im Broker.
+ * Fluechtig bleiben die Teile des Lebenszeichens - der umlaufende ZAEHLER
+ * (zweimal: als eigenes Thema und unter status/), der Zeitstempel und
+ * status/ok (seit 0.9.19, Entscheidung des Hausherrn vom 17.09.2026).
+ * Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt den
+ * Zeitstempel." Die Altwerte raeumt bw_mqtt_altlast_abraeumen() ab.
  *
  * ALTER geht ueber MQTT gar nicht hinaus und steht deshalb nicht in der
  * Tabelle.
@@ -1523,8 +1702,7 @@ function bw_mqtt_retain($thema)
     if ($tab === null) {
         $tab = array();
         foreach (array(
-            'ok', 'aktiv', 'fenster', 'ziele',
-            'gesendet', 'fehler', 'code',
+            'aktiv', 'ziele', 'gesendet',
             'scharf', 'automatiken',
         ) as $t) { $tab[$t] = true; }
     }
@@ -1592,29 +1770,83 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
 }
 
 /**
- * Den zurueckbehaltenen Wert von status/ok aus 0.9.18 einmal loeschen.
+ * Die Themen, deren zurueckbehaltener ALTWERT abgeraeumt werden muss.
  *
- * Ein spaeteres publish ersetzt einen retained Wert NICHT - er bliebe fuer
- * immer im Broker. Geloescht wird mit einer leeren Nutzlast und dem
- * Befehlswort retain (am Broker belegt 14.09.2026, Regeln/07). VOR den
- * frischen Werten: die leere Nachricht geht auch an die Abonnenten, und der
- * frische Wert folgt im selben Durchgang.
+ * Eine Umstellung von retain auf publish loescht nichts: der alte Wert steht
+ * im Broker weiter und wird nach jedem Neustart von Broker oder Gateway
+ * wieder ausgeliefert. status/ok ging in 0.9.18 retained hinaus, ok,
+ * fenster, fehler und code bis 0.9.19.
+ */
+function bw_mqtt_altlast_liste()
+{
+    return array('status/ok', 'ok', 'fenster', 'fehler', 'code');
+}
+
+if (!defined('BW_ALTLAST_RUNDEN')) {
+    define('BW_ALTLAST_RUNDEN', 3);
+}
+
+/**
+ * Die Altwerte aus bw_mqtt_altlast_liste() abraeumen - in drei Vollversaenden.
  *
- * Der Merker liegt als eigene Datei im Datenordner, nicht in lauf.json:
- * bw_lauf_schreiben() schreibt jene Datei bei jedem Lauf mit genau drei
- * Schluesseln neu. Der Installer raeumt den Datenordner bei jedem Upgrade ab
- * - dann wird eben noch einmal geloescht; fuer ein nicht zurueckbehaltenes
- * Thema ist das wirkungslos.
+ * Geloescht wird mit einer leeren Nutzlast und dem Befehlswort retain (am
+ * Broker belegt 14.09.2026, Regeln/07), VOR den frischen Werten desselben
+ * Vollversands: die leere Nachricht geht auch an die Abonnenten, und der
+ * gueltige Wert folgt unmittelbar. Deshalb steht der Aufruf NUR in
+ * bw_mqtt_publish() - der Lebenszeichenlauf schickt ok, fehler, code und
+ * fenster nicht mit.
+ *
+ * DIE GRENZE: der einzige Weg dieser Linie ist der UDP-Eingang des
+ * Gateways. Er bestaetigt nichts, verwirft unter Last Datagramme, und das
+ * Senden meldet auch fuer ein verworfenes Erfolg (Regeln/07). Am Geraet
+ * belegt am 19.09.2026: der Merker der 0.9.19 stand, und
+ * beschattung/status/ok 1 lag weiter im Broker. Nachlesen kann die Linie
+ * nicht - sie hat keine eigene Verbindung zum Broker. Deshalb geht die
+ * Loeschung in DREI Vollversaenden hinaus (je mindestens einen Abstand
+ * auseinander, so dass nicht derselbe Verwurfschub alle trifft), und der
+ * Merker zaehlt nur Runden, deren Datagramme vollstaendig geschrieben
+ * wurden. Er sagt damit "dreimal gesendet", nicht "geloescht"; die README
+ * nennt das.
+ *
+ * Die Kennung im Merker ist Praefix plus Themenliste (Bauart Weissware
+ * 0.9.28): wer das Praefix umstellt, bekommt unter dem neuen Stamm eine
+ * eigene Abraeumung, und der Merker der 0.9.19 (retain_status_ok_geloescht)
+ * gilt nicht als erledigt (Faelle R8, R11, R12). Der Installer raeumt den
+ * Datenordner bei jedem Update ab - dann beginnt die Zaehlung neu.
  */
 function bw_mqtt_altlast_abraeumen($port, $praefix)
 {
     $p = bw_paths();
-    $merker = $p['datadir'] . '/retain_status_ok_geloescht';
-    if (is_file($merker)) { return false; }
-    if (bw_mqtt_senden($port, array('retain ' . $praefix . '/status/ok ')) !== 1) { return false; }
-    @file_put_contents($merker, date('c') . "\n");
-    bw_log('MQTT: zurueckbehaltenen Wert von ' . $praefix . '/status/ok aus 0.9.18 geloescht '
-        . '- das Lebenszeichen geht seit 0.9.19 nicht mehr retained hinaus.');
+    $merker = $p['datadir'] . '/retain_altlast';
+    $kennung = $praefix . ' ' . implode(',', bw_mqtt_altlast_liste());
+    $runde = 0;
+    $roh = is_file($merker) ? @file($merker, FILE_IGNORE_NEW_LINES) : false;
+    if (is_array($roh) && isset($roh[0], $roh[1]) && $roh[0] === $kennung
+        && preg_match('/^[0-9]{1,3}$/', $roh[1]) === 1) {
+        $runde = (int) $roh[1];
+    }
+    if ($runde >= BW_ALTLAST_RUNDEN) {
+        return false;
+    }
+    $zeilen = array();
+    foreach (bw_mqtt_altlast_liste() as $t) {
+        /* Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: genau die
+           Form, die das Gateway als Loeschung liest (Regeln/07, Nachtrag
+           19.09.2026: mqttgateway.pl:281, :311-315, :357). */
+        $zeilen[] = 'retain ' . $praefix . '/' . $t . ' ';
+    }
+    if (bw_mqtt_senden($port, $zeilen) !== count($zeilen)) {
+        return false;
+    }
+    $runde++;
+    if (!is_dir($p['datadir'])) {
+        @mkdir($p['datadir'], 0775, true);
+    }
+    @file_put_contents($merker, $kennung . "\n" . $runde . "\n");
+    bw_log('MQTT: zurueckbehaltene Altwerte unter ' . $praefix . '/ ('
+        . implode(', ', bw_mqtt_altlast_liste()) . ') mit leerer Nutzlast an den '
+        . 'UDP-Eingang geschickt, Runde ' . $runde . ' von ' . BW_ALTLAST_RUNDEN
+        . '. Der Eingang bestaetigt nichts - siehe README.');
     return true;
 }
 
@@ -1626,7 +1858,10 @@ function bw_mqtt_lebenszeichen(?array $c = null)
     $gw = bw_mqtt_gateway_info();
     if ($gw === null || $gw['udpport'] === 0) { return 0; }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
-    bw_mqtt_altlast_abraeumen($gw['udpport'], $w);
+    /* Kein Abraeumen hier: dieser Lauf schickt ok, fehler, code und fenster
+       nicht mit, und eine leere Nachricht ohne den gueltigen Wert dahinter
+       kaeme am Miniserver als leerer Wert an (Regeln/07). Abgeraeumt wird im
+       Vollversand, bw_mqtt_publish(). */
     $lauf = bw_lauf_lesen();
     /* Dieselbe Tabelle wie oben - seit 0.9.19 geht status/ok auch hier
        fluechtig hinaus. Wer die Entscheidung am AUFRUF traefe, haette sie
@@ -1636,6 +1871,80 @@ function bw_mqtt_lebenszeichen(?array $c = null)
         bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']),
         bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']),
     ));
+}
+
+/**
+ * Die Themen, die die Deinstallation leert: jedes, das eine veroeffentlichte
+ * Fassung je retained gesendet hat - die Tabelle bw_mqtt_retain() und die
+ * Altwerte. Was nie retained ging (zaehler, status/ts, status/zaehler),
+ * bleibt unberuehrt: eine leere Nachricht darauf loeschte nichts, kaeme aber
+ * am Miniserver als leerer Wert an.
+ */
+function bw_mqtt_leer_themen()
+{
+    $t = array();
+    foreach (array_keys(bw_felder()) as $k) {
+        $k = strtolower($k);
+        if (bw_mqtt_retain($k)) {
+            $t[] = $k;
+        }
+    }
+    foreach (bw_mqtt_altlast_liste() as $k) {
+        if (!in_array($k, $t, true)) {
+            $t[] = $k;
+        }
+    }
+    return $t;
+}
+
+/**
+ * Die zurueckbehaltenen Themen leeren - fuer uninstall/uninstall
+ * (bw_lauf.php --mqtt-leeren). Schreibt kein Protokoll und legt nichts an.
+ *
+ * Der Weg ist der einzige, den die Linie hat: der UDP-Eingang des Gateways,
+ * dieselbe Loeschform wie bw_mqtt_altlast_abraeumen(). GRENZE: er bestaetigt
+ * nichts und verwirft unter Last Datagramme; nachlesen laesst sich ohne
+ * eigene Brokerverbindung nicht. Deshalb geht jede Loeschung $runden-mal
+ * hinaus, mit Pause dazwischen - das senkt den Verlust, beseitigt ihn nicht
+ * (Bauart Weissware 0.9.30). Rueckgabe 0 gesendet, 1 Senden gescheitert,
+ * 2 nicht moeglich.
+ */
+function bw_mqtt_leeren($runden = 3, $pause_us = 1000000)
+{
+    $c = bw_config(false);
+    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    $gw = bw_mqtt_gateway_info();
+    if ($gw === null || $gw['udpport'] === 0) {
+        echo '<INFO> MQTT: in der general.json steht kein UDP-Eingangsport des Gateways - '
+           . 'zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.' . "\n";
+        return 2;
+    }
+    $themen = bw_mqtt_leer_themen();
+    $n = 0;
+    for ($r = 1; $r <= $runden; $r++) {
+        $fp = @stream_socket_client('udp://127.0.0.1:' . (int) $gw['udpport'], $eno, $etxt, 2);
+        if (!$fp) {
+            echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
+               . (int) $gw['udpport'] . ') - zurueckbehaltene Themen unter ' . $w
+               . '/ wurden nicht geleert.' . "\n";
+            return 1;
+        }
+        foreach ($themen as $t) {
+            if (@fwrite($fp, 'retain ' . $w . '/' . $t . ' ') !== false) {
+                $n++;
+            }
+        }
+        fclose($fp);
+        if ($r < $runden) {
+            usleep((int) $pause_us);
+        }
+    }
+    echo '<OK> MQTT: ' . count($themen) . ' zurueckbehaltene Themen unter ' . $w . '/ je '
+       . $runden . '-mal mit leerer Nutzlast an den UDP-Eingang geschickt (' . $n
+       . ' Datagramme).' . "\n";
+    echo '<INFO> Der UDP-Eingang bestaetigt nichts und verwirft unter Last Datagramme; ob der '
+       . 'Broker die Themen geloescht hat, laesst sich von hier aus nicht nachlesen.' . "\n";
+    return 0;
 }
 
 /** Die Themen, die dieses Plugin veroeffentlicht - fuer die Tabelle im Reiter. */
@@ -2025,8 +2334,11 @@ function bw_melden(?array $c = null)
     /* bw_paths() nennt den Schluessel lbhome, nicht home - mit dem
        falschen Namen waere $bw_liblog leer und is_file('') false,
        und die Behebung liefe ins Leere, ohne dass es auffiele. */
-    $bw_liblog = $p['lbhome'] . '/libs/phplib/loxberry_log.php';
-    if (!function_exists('notify_ext') && is_file($bw_liblog)) {
+    /* Nur aus der Wurzel der Anlage. Ohne Wurzel hiess das bis 0.9.19
+       /libs/phplib/loxberry_log.php ab der Laufwerkswurzel, und was dort
+       lag, lief mit (Fall T2). */
+    $bw_liblog = $p['lbhome'] !== '' ? $p['lbhome'] . '/libs/phplib/loxberry_log.php' : '';
+    if ($bw_liblog !== '' && !function_exists('notify_ext') && is_file($bw_liblog)) {
         @require_once $bw_liblog;
     }
     if ($stufe <= 4 && function_exists('notify_ext')) {

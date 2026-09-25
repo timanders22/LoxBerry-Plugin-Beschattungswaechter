@@ -21,16 +21,28 @@
  *   php bw_lauf.php            regulaerer Lauf
  *   php bw_lauf.php --jetzt    ohne Ruecksicht auf Abstand und Fenster
  *   php bw_lauf.php --probe    sagt nur, was er taete - sendet nichts
+ *   php bw_lauf.php --mqtt-leeren
+ *                              leert die zurueckbehaltenen MQTT-Themen
+ *                              (aus uninstall/uninstall)
  */
 
+/* Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
+   der Versuche: liegt diese Datei unter .../bin/plugins/<ordner>, ist sie
+   installiert, sonst liegt sie in einem ausgepackten Archiv. Bis 0.9.19 kam
+   der installierte Kandidat auch im Archiv VOR der eigenen Bibliothek - aus
+   einem Archiv unter / hiess das /webfrontend/html/plugins/bin/bw_lib.php ab
+   der Laufwerkswurzel, und was dort lag, lief als Bibliothek (in WSL
+   gemessen, Pruefung-Beschattungswaechter-0.9.20, Fall T4; Bauart
+   ZendureSolarFlow 0.9.26). */
 $bw_lib = '';
-foreach (array(
-    getenv('LBPHTMLDIR') ? getenv('LBPHTMLDIR') . '/bw_lib.php' : '',
-    dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/'
-        . basename(__DIR__) . '/bw_lib.php',
-    dirname(__DIR__) . '/webfrontend/html/bw_lib.php',
-    __DIR__ . '/bw_lib.php',
-) as $bw_k) {
+$bw_kand = array(getenv('LBPHTMLDIR') ? getenv('LBPHTMLDIR') . '/bw_lib.php' : '');
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $bw_kand[] = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/'
+               . basename(__DIR__) . '/bw_lib.php';
+} else {
+    $bw_kand[] = dirname(__DIR__) . '/webfrontend/html/bw_lib.php';
+}
+foreach ($bw_kand as $bw_k) {
     if ($bw_k !== '' && is_file($bw_k)) { $bw_lib = $bw_k; break; }
 }
 if ($bw_lib === '') {
@@ -43,7 +55,7 @@ require_once $bw_lib;
    Antwort ergeben und keinen Lauf - bei einem Werkzeug, das etwas an eine
    fremde Anlage schickt, ist das nicht Kosmetik. */
 $bw_argv = isset($argv) ? $argv : array();
-$bw_bekannt = array('--jetzt', '--probe');
+$bw_bekannt = array('--jetzt', '--probe', '--mqtt-leeren');
 foreach ($bw_argv as $bw_i => $bw_a) {
     if ($bw_i === 0 || strncmp((string) $bw_a, '--', 2) !== 0) {
         continue;
@@ -56,6 +68,19 @@ foreach ($bw_argv as $bw_i => $bw_a) {
 }
 $bw_jetzt = in_array('--jetzt', $bw_argv, true);
 $bw_probe = in_array('--probe', $bw_argv, true);
+$bw_leeren = in_array('--mqtt-leeren', $bw_argv, true);
+
+/* Ohne Wurzel oder aus einem Archiv heraus: nichts senden, nichts schreiben.
+   Bis 0.9.19 lief der Lauf auch dann - aus einem Archiv unter der Wurzel
+   einer Anlage (oder mit deren LBHOMEDIR) mit deren Konfiguration, deren
+   Miniserver und deren stand.json (in WSL gemessen,
+   Pruefung-Beschattungswaechter-0.9.20, Faelle A1-A3, A8). */
+bw_keine_wurzel_abbruch('bw_lauf.php');
+
+if ($bw_leeren) {
+    /* Aufgerufen aus uninstall/uninstall. */
+    exit(bw_mqtt_leeren());
+}
 
 $c = bw_config();
 $stand = bw_stand_lesen();

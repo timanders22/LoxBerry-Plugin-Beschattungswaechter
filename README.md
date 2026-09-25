@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.19
+Version 0.9.20
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -151,7 +151,7 @@ es selbst ein und schaltet das Eingabefeld ab. Der Reiter *MQTT* liest die
 Fassung aus `config/system/general.json` und zeigt genau den Satz, der zur
 gemessenen Fassung gehört — und wenn sie nicht lesbar ist, **beide**.
 
-### Was zurückbehalten wird — und was nicht (ab 0.9.18)
+### Was zurückbehalten wird — und was nicht (ab 0.9.18, zuletzt geändert 0.9.20)
 
 Ein Broker kann den letzten Wert eines Themas festhalten (*retained*). Loxone
 hat ihn dann nach einem Neustart des Miniservers oder des Brokers sofort wieder
@@ -162,15 +162,31 @@ Thema**, nicht je Absendung:
 
 | | Themen | warum |
 |---|---|---|
-| **zurückbehalten** | `ok`, `aktiv`, `fenster`, `ziele`, `gesendet`, `fehler`, `code`, `scharf`, `automatiken` | Zustände. Nach einem Neustart sollen sie sofort wieder stimmen. |
+| **zurückbehalten** | `aktiv`, `ziele`, `gesendet`, `scharf`, `automatiken` | Einstellungen und Aussagen über die Anlage, die auch nach dem Ende der Läufe wahr bleiben. `gesendet` zählt die Befehle seit dem letzten Update — ein Verlaufszähler. |
+| **flüchtig** | `ok`, `fehler`, `code` | Was der Wächter über **sich selbst** sagt. Zurückbehalten stünde nach seinem Ende für immer „in Ordnung" da. |
+| **flüchtig** | `fenster` | Wird allein durch die Uhr falsch: ein Vollversand geht nur im Zeitfenster hinaus, zurückbehalten stand nachts `1` im Broker. |
 | **flüchtig** | `zaehler`, `status/zaehler`, `status/ts`, `status/ok` | Das Lebenszeichen. Zurückbehalten stünde es für immer da und sähe aus wie ein laufender Wächter — genau das, was es widerlegen soll. |
 
-**Seit 0.9.19** geht auch `status/ok` flüchtig hinaus; in 0.9.18 war es
-zurückbehalten. Nach dem Ende der Cron-Läufe stand damit für immer `1` im
-Broker. Den alten Wert löscht der Wächter beim ersten Senden nach dem Update
-einmal (Protokollzeile „zurückbehaltenen Wert … gelöscht“). Wer in Loxone
-auf `status/ok` hört, bekommt den Wert nach einem Neustart des Miniservers
-mit dem nächsten Durchgang, nicht mehr sofort aus dem Broker.
+**Seit 0.9.19** geht `status/ok` flüchtig hinaus, **seit 0.9.20** auch `ok`,
+`fehler`, `code` und `fenster`. Wer in Loxone auf eines davon hört, bekommt den
+Wert nach einem Neustart des Miniservers mit dem nächsten Durchgang, nicht mehr
+sofort aus dem Broker.
+
+**Die alten Werte räumt der Wächter ab** — mit einer leeren Nachricht auf dem
+Befehlswort `retain`, unmittelbar gefolgt vom gültigen Wert, in den **ersten drei
+Vollversänden** nach dem Update (Protokollzeile „zurückbehaltene Altwerte …
+Runde n von 3“). **Die Grenze:** der Weg dieses Plugins ist der UDP-Eingang des
+MQTT-Gateways. Er bestätigt nichts und verwirft unter Last Datagramme, und das
+Plugin hat keine eigene Verbindung zum Broker, um nachzulesen. Am Gerät belegt
+am 19.09.2026: nach der einmaligen Löschung der 0.9.19 lag `status/ok 1` weiter
+im Broker. Drei Runden senken das Risiko, beseitigen es nicht; der Merker im
+Datenordner sagt „dreimal gesendet“, nicht „gelöscht“. Nachsehen lässt es sich
+am LoxBerry mit `mosquitto_sub -t '<präfix>/#' -v --retained-only` — stehen dort
+danach noch `ok`, `fehler`, `code`, `fenster` oder `status/ok`, löscht
+`mosquitto_pub -r -n -t '<präfix>/<thema>'` (mit den Broker-Zugangsdaten) den Rest.
+
+**Beim Deinstallieren** schickt das Plugin für jedes Thema, das je zurückbehalten
+hinausging, dreimal eine leere Nachricht an den UDP-Eingang — mit derselben Grenze.
 
 Die Spalte *Zurückbehalten* im Reiter *MQTT* fragt dieselbe Funktion, die auch
 sendet; eine zweite Liste wäre eine zweite Wahrheit.
@@ -213,6 +229,53 @@ in denen die eine wichtige untergeht.
 
 Reines PHP, keine Nachinstallation, keine Internetverbindung. Das Plugin
 spricht ausschließlich mit dem Miniserver im eigenen Netz.
+
+## Fassung 0.9.20 — Nachlese: Wurzel, Archiv, Retain, Zweitschrift
+
+Durchgesehen gegen die zehn Muster, die im Herbst 2026 in fast jeder Linie der
+Sammlung Befunde waren. Gemessen in WSL, nicht am Gerät
+(Prüfstand `Pruefung-Beschattungswaechter-0.9.20`, 60 Fälle).
+
+* **Die LoxBerry-Wurzel** ist nur ein Verzeichnis mit `config/plugins`,
+  `data/plugins` **und** `config/system/general.json`. `preupgrade.sh`,
+  `postinstall.sh`, `postupgrade.sh` und die Deinstallation rechneten ohne
+  fünftes Argument feste Stufen hinauf und handelten dort ohne jede Prüfung —
+  aus einem fremden Baum heraus überschrieben sie dessen Sicherung, legten
+  Ordner an und löschten Dateien; die Deinstallation hielt `system` für den
+  Ordnernamen und ließ die eigene Sicherung samt Merkwort liegen. Ohne Wurzel
+  wird jetzt gewarnt und nichts getan.
+* **Ein ausgepacktes Archiv wirkt nicht mehr auf die Anlage.** Lag es unter der
+  Wurzel eines LoxBerry oder war `LBHOMEDIR` gesetzt (am Gerät steht es in
+  `/etc/environment`), schickte `bin/bw_lauf.php --jetzt` aus dem Archiv den
+  Befehl an den Miniserver der Anlage, der Endpunkt nahm deren Merkwort an und
+  die Oberfläche schrieb deren Konfiguration. Die Pfade der Anlage gelten nur
+  noch, wenn das Plugin dort installiert liegt oder `LBHOMEDIR` **und**
+  `LBPPLUGINDIR` ausdrücklich gesetzt sind; sonst bleibt alles im Archiv, und
+  `bw_lauf.php` steigt mit einer Meldung aus.
+* **Keine Pfade mehr ab der Laufwerkswurzel:** Sprachdateien, die
+  Protokollbibliothek für das Benachrichtigungszentrum, die Suchlisten für die
+  eigene Bibliothek in Oberfläche, Lauf und Healthcheck, die `plugin.cfg` und
+  die Anzeige im Reiter Test fanden aus einem Archiv unter `/` Dateien
+  außerhalb des Plugins.
+* **Retain nach der Hausregel** (Regeln/07, Abschnitt 3): `ok`, `fehler`, `code`
+  und `fenster` gehen flüchtig hinaus, die Altwerte werden abgeräumt, und die
+  Deinstallation räumt die zurückbehaltenen Themen ab — Einzelheiten und die
+  Grenze des UDP-Wegs im Abschnitt *MQTT* oben.
+* **Die Zweitschrift entscheidet nach Inhalt** — eine Kennung oder ein Merkwort
+  muss darin stehen. Fehlt die Konfigurationsdatei oder ist sie leer, stellt
+  das Plugin sie aus der Zweitschrift wieder her; bis 0.9.19 geschah das nur bei
+  einer beschädigten Datei, und der Fünfminutentakt meldete in der Lücke eines
+  Updates „kein Ziel eingerichtet“ an das Benachrichtigungszentrum. Eine
+  Zweitschrift ohne Inhalt heilt nichts mehr, und `preupgrade.sh` überschreibt
+  eine Zweitschrift mit Inhalt nicht mehr mit `{}`.
+* **`postinstall.sh` sagt, was war:** „wiederhergestellt“ nur, wenn die
+  Sicherung Inhalt trug, und nach einem Update keine Erstanleitung mehr, wenn
+  die Einstellungen übernommen sind.
+
+Geprüft und **kein Befund**: Diensterkennung und Knöpfe ohne Dienst (die Linie
+hat keinen Dauerdienst, der Endpunkt sendet selbst), Letzter Wille (kein eigener
+Brokerweg), `%f` in Zahlen. Die Oberfläche legt in der Lücke eines Updates
+nichts an (gemessen).
 
 ## Fassung 0.9.14 — die Bausteine heißen jetzt wie Namen
 

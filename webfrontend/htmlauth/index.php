@@ -33,9 +33,18 @@ $bw_html = getenv('LBPHTMLDIR');
 if ($bw_html !== false && $bw_html !== '') {
     $bw_kandidaten[] = rtrim($bw_html, '/\\') . '/bw_lib.php';
 }
-$bw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/html/plugins/'
-                 . basename(__DIR__) . '/bw_lib.php';
-$bw_kandidaten[] = dirname(__DIR__) . '/html/bw_lib.php';
+/* Installiert oder Archiv entscheidet der eigene Ablageort: liegt diese Datei
+   unter .../htmlauth/plugins/<ordner>, ist sie installiert. Bis 0.9.19 kam der
+   installierte Kandidat auch im Archiv VOR der eigenen Bibliothek - aus einem
+   Archiv unter / war das /html/plugins/htmlauth/bw_lib.php ab der
+   Laufwerkswurzel, und was dort lag, lief als Bibliothek (in WSL gemessen,
+   Pruefung-Beschattungswaechter-0.9.20, Fall T3). */
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $bw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/html/plugins/'
+                     . basename(__DIR__) . '/bw_lib.php';
+} else {
+    $bw_kandidaten[] = dirname(__DIR__) . '/html/bw_lib.php';
+}
 $bw_geladen = '';
 foreach ($bw_kandidaten as $bw_k) {
     if (is_file($bw_k)) { require_once $bw_k; $bw_geladen = $bw_k; break; }
@@ -999,8 +1008,11 @@ bw_zeile($bw_selbst, bw_t('TEXT.S_VOLL'),
 /* VIER Stufen bis zur Wurzel: <ordner> -> plugins -> htmlauth ->
    webfrontend. Drei blieben bei webfrontend stehen und suchten darunter
    ein bin/ - das gibt es dort nicht. */
-$bw_bin = dirname(dirname(dirname(dirname(__DIR__)))) . '/bin/plugins/'
-        . bw_paths()['plugin'] . '/bw_lauf.php';
+/* Im Archiv liegt der Lauf unter <archiv>/bin/. Bis 0.9.19 wurde auch
+   dort vier Stufen hinauf gerechnet, also AUSSERHALB des Archivs (Fall T13). */
+$bw_bin = (basename(dirname(__DIR__)) === 'plugins')
+    ? dirname(dirname(dirname(dirname(__DIR__)))) . '/bin/plugins/' . bw_paths()['plugin'] . '/bw_lauf.php'
+    : dirname(dirname(__DIR__)) . '/bin/bw_lauf.php';
 $bw_binenv = getenv('LBPBINDIR');
 if ($bw_binenv !== false && $bw_binenv !== '') { $bw_bin = $bw_binenv . '/bw_lauf.php'; }
 bw_zeile($bw_selbst, bw_t('TEXT.S_LAUF'), is_file($bw_bin) ? 1 : 0,
@@ -1071,10 +1083,11 @@ if (!is_array($bw_de) || !is_array($bw_en)) {
    Namensaufloesung, Port und Proxy und wuerde hier rot werden, wo nichts rot
    ist. Wer den Weg wirklich messen will, hat dafuer den Selbsttest des
    Endpunkts (?selftest=1) - der Link steht darunter. */
-$bw_ep = dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . bw_paths()['plugin'] . '/index.php';
-if (!is_file($bw_ep) && is_file(dirname(__DIR__) . '/html/index.php')) {
-    $bw_ep = dirname(__DIR__) . '/html/index.php';
-}
+/* Dieselbe Lageregel wie oben: im Archiv der eigene Endpunkt. Bis 0.9.19
+   zuerst drei Stufen hinauf, also ein Ort ausserhalb des Archivs (Fall T12). */
+$bw_ep = (basename(dirname(__DIR__)) === 'plugins')
+    ? dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . bw_paths()['plugin'] . '/index.php'
+    : dirname(__DIR__) . '/html/index.php';
 bw_zeile($bw_selbst, bw_t('TEXT.S_ENDPUNKT'), is_file($bw_ep) ? 1 : 0,
     is_file($bw_ep) ? $bw_ep : bw_t('TEXT.S_NICHT_GEFUNDEN'));
 

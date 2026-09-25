@@ -29,14 +29,21 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
+/* Installiert oder Archiv entscheidet der eigene Ablageort: installiert
+   liegt diese Datei unter <home>/bin/plugins/<ordner>, im ausgepackten Archiv
+   unter <archiv>/bin. Bis 0.9.19 wurden drei Kandidaten der Reihe nach
+   probiert; fehlte die eigene Bibliothek, war der zweite aus einem Archiv
+   unter / die Datei /webfrontend/html/plugins/bin/bw_lib.php ab der
+   Laufwerkswurzel (in WSL gemessen, Pruefung-Beschattungswaechter-0.9.20,
+   Fall T5; Bauart ZendureSolarFlow 0.9.26). */
 $bw_gefunden = false;
-foreach (array(
-    dirname(__DIR__) . '/webfrontend/html/bw_lib.php',
-    dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/'
-        . basename(__DIR__) . '/bw_lib.php',
-    dirname(dirname(__DIR__)) . '/webfrontend/html/plugins/'
-        . basename(__DIR__) . '/bw_lib.php',
-) as $bw_kandidat) {
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $bw_kandidaten = array(dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/'
+                           . basename(__DIR__) . '/bw_lib.php');
+} else {
+    $bw_kandidaten = array(dirname(__DIR__) . '/webfrontend/html/bw_lib.php');
+}
+foreach ($bw_kandidaten as $bw_kandidat) {
     if (is_file($bw_kandidat)) {
         require_once $bw_kandidat;
         $bw_gefunden = true;
