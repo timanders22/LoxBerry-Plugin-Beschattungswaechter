@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.20
+Version 0.9.21
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -151,7 +151,7 @@ es selbst ein und schaltet das Eingabefeld ab. Der Reiter *MQTT* liest die
 Fassung aus `config/system/general.json` und zeigt genau den Satz, der zur
 gemessenen Fassung gehört — und wenn sie nicht lesbar ist, **beide**.
 
-### Was zurückbehalten wird — und was nicht (ab 0.9.18, zuletzt geändert 0.9.20)
+### Was zurückbehalten wird — und was nicht (ab 0.9.18, zuletzt geändert 0.9.21)
 
 Ein Broker kann den letzten Wert eines Themas festhalten (*retained*). Loxone
 hat ihn dann nach einem Neustart des Miniservers oder des Brokers sofort wieder
@@ -172,21 +172,34 @@ Thema**, nicht je Absendung:
 Wert nach einem Neustart des Miniservers mit dem nächsten Durchgang, nicht mehr
 sofort aus dem Broker.
 
-**Die alten Werte räumt der Wächter ab** — mit einer leeren Nachricht auf dem
-Befehlswort `retain`, unmittelbar gefolgt vom gültigen Wert, in den **ersten drei
-Vollversänden** nach dem Update (Protokollzeile „zurückbehaltene Altwerte …
-Runde n von 3“). **Die Grenze:** der Weg dieses Plugins ist der UDP-Eingang des
-MQTT-Gateways. Er bestätigt nichts und verwirft unter Last Datagramme, und das
-Plugin hat keine eigene Verbindung zum Broker, um nachzulesen. Am Gerät belegt
-am 19.09.2026: nach der einmaligen Löschung der 0.9.19 lag `status/ok 1` weiter
-im Broker. Drei Runden senken das Risiko, beseitigen es nicht; der Merker im
-Datenordner sagt „dreimal gesendet“, nicht „gelöscht“. Nachsehen lässt es sich
-am LoxBerry mit `mosquitto_sub -t '<präfix>/#' -v --retained-only` — stehen dort
-danach noch `ok`, `fehler`, `code`, `fenster` oder `status/ok`, löscht
-`mosquitto_pub -r -n -t '<präfix>/<thema>'` (mit den Broker-Zugangsdaten) den Rest.
+**Die alten Werte räumt der Wächter ab — und fragt den Broker, ob sie weg sind**
+(seit 0.9.21). Vor einem Vollversand meldet sich das Plugin mit den
+Broker-Zugangsdaten aus der zentralen LoxBerry-Konfiguration beim Broker an und
+fragt, ob unter `<präfix>/` noch `status/ok`, `ok`, `fenster`, `fehler` oder
+`code` zurückbehalten stehen. Was dort steht, bekommt eine leere Nachricht auf
+dem Befehlswort `retain`, unmittelbar gefolgt vom gültigen Wert desselben
+Themas. Erst wenn der Broker selbst sagt, dass keines mehr dasteht, legt das
+Plugin einen Merker ab und fragt nicht mehr (Protokollzeile „… vom Broker
+bestätigt“).
 
-**Beim Deinstallieren** schickt das Plugin für jedes Thema, das je zurückbehalten
-hinausging, dreimal eine leere Nachricht an den UDP-Eingang — mit derselben Grenze.
+**Die Grenze:** ist der Broker nicht zu fragen — Zugangsdaten fehlen oder
+stimmen nicht, er verweigert das Lesen, er antwortet nicht —, gibt es keinen
+Merker. Dann räumt **jeder** Vollversand alle fünf Themen unmittelbar vor ihrem
+gültigen Wert ab, und das Protokoll sagt es einmal am Tag. Gelöscht wird
+weiterhin über den UDP-Eingang des MQTT-Gateways; er bestätigt nichts und
+verwirft unter Last Datagramme (am Gerät belegt am 19.09.2026: nach der
+einmaligen Löschung der 0.9.19 lag `status/ok 1` weiter im Broker). Bis 0.9.20
+galt die Sache nach drei Sendungen als erledigt — gesendet ist nicht gelöscht.
+Nachsehen lässt es sich am LoxBerry mit
+`mosquitto_sub -t '<präfix>/#' -v --retained-only`; ein Rest geht mit
+`mosquitto_pub -r -n -t '<präfix>/<thema>'` (mit den Broker-Zugangsdaten).
+
+**Beim Deinstallieren** fragt das Plugin zuerst den Broker, welche der Themen,
+die je zurückbehalten hinausgingen, noch stehen, schickt nur für diese eine
+leere Nachricht und liest danach nach — höchstens drei Runden. Die Ausgabe sagt,
+was war: „der Broker bestätigt: keines … steht mehr“, eine Warnung mit den
+übrig gebliebenen Themen, oder „nicht nachgelesen“, wenn der Broker nicht zu
+fragen war (dann gehen alle Themen dreimal hinaus).
 
 Die Spalte *Zurückbehalten* im Reiter *MQTT* fragt dieselbe Funktion, die auch
 sendet; eine zweite Liste wäre eine zweite Wahrheit.
@@ -229,6 +242,24 @@ in denen die eine wichtige untergeht.
 
 Reines PHP, keine Nachinstallation, keine Internetverbindung. Das Plugin
 spricht ausschließlich mit dem Miniserver im eigenen Netz.
+
+## Fassung 0.9.21 — Altwerte gelten erst als gelöscht, wenn der Broker es sagt
+
+* **Kein Merker mehr auf bloßes Senden.** 0.9.20 räumte die früher
+  zurückbehaltenen Werte (`status/ok`, `ok`, `fenster`, `fehler`, `code`) in den
+  ersten drei Vollversänden über den UDP-Eingang ab und hielt die Sache dann für
+  erledigt — ob sie im Broker wirklich weg waren, wusste es nicht. Jetzt fragt
+  das Plugin den Broker selbst (eigenes MQTT-3.1.1-Abonnement mit den
+  Zugangsdaten aus `general.json`, ohne Zusatzbibliothek), räumt nur ab, was
+  dort noch steht, jeweils unmittelbar vor dem gültigen Wert, und setzt den
+  Merker erst auf die Antwort des Brokers. Ist er nicht zu fragen, räumt jeder
+  Vollversand ab.
+* **Die Deinstallation liest nach**, statt dreimal blind zu senden, und meldet,
+  was stehen blieb.
+
+Gemessen in WSL gegen einen Nachbau von UDP-Eingang und Broker (Prüfstand
+`Pruefung-Beschattungswaechter-0.9.21`, 89 Fälle, darunter verlorene Löschungen,
+ein falsches Kennwort und ein Broker, der das Lesen verweigert); nicht am Gerät.
 
 ## Fassung 0.9.20 — Nachlese: Wurzel, Archiv, Retain, Zweitschrift
 

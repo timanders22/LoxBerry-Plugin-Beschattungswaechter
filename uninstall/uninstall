@@ -50,9 +50,10 @@ fi
 # Deinstallation raeumt sie ab). Bis 0.9.19 blieben aktiv, ziele, gesendet,
 # scharf, automatiken - und aus 0.9.18/0.9.19 ok, fenster, fehler, code und
 # status/ok - nach dem Entfernen fuer immer im Broker und kamen nach jedem
-# Neustart von Broker oder Gateway wieder am Miniserver an (Fall R14). Der
-# einzige Weg der Linie ist der UDP-Eingang des Gateways: ohne Bestaetigung
-# und ohne Nachlesen; bw_mqtt_leeren() schickt deshalb drei Runden. VOR dem
+# Neustart von Broker oder Gateway wieder am Miniserver an (Fall R14).
+# Geloescht wird ueber den UDP-Eingang des Gateways, der nichts bestaetigt;
+# bw_mqtt_leeren() fragt deshalb vorher und nach jeder Runde den Broker
+# (hoechstens drei Runden; bis 0.9.20 dreimal blind, Faelle U1-U8). VOR dem
 # Loeschen der Ordner, denn Praefix und Port stehen in der Konfiguration.
 LAUF="$BASE/bin/plugins/$PFOLDER/bw_lauf.php"
 if [ -f "$LAUF" ] && command -v php >/dev/null 2>&1; then

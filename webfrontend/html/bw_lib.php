@@ -1687,7 +1687,8 @@ function bw_mqtt_senden($port, array $zeilen)
  * (zweimal: als eigenes Thema und unter status/), der Zeitstempel und
  * status/ok (seit 0.9.19, Entscheidung des Hausherrn vom 17.09.2026).
  * Regeln/07: "Das Lebenszeichen ist nie retained ... es traegt den
- * Zeitstempel." Die Altwerte raeumt bw_mqtt_altlast_abraeumen() ab.
+ * Zeitstempel." Die Altwerte raeumt bw_mqtt_publish() ab, solange
+ * bw_mqtt_altlast() sie meldet.
  *
  * ALTER geht ueber MQTT gar nicht hinaus und steht deshalb nicht in der
  * Tabelle.
@@ -1753,19 +1754,35 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
         return 0;
     }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
-    $zeilen = array();
+    $werte = array();
     foreach (bw_werte($c, $stand) as $k => $v) {
         /* ALTER geht NICHT ueber MQTT: es aendert sich jede Sekunde und
            machte jeden Doppelt-senden-Filter wirkungslos. Der Zeitstempel
            unten sagt dasselbe, und der Miniserver rechnet selbst. */
         if ($k === 'ALTER') { continue; }
-        $zeilen[] = bw_mqtt_zeile($w, strtolower($k), $v);
+        $werte[strtolower($k)] = $v;
     }
-    bw_mqtt_altlast_abraeumen($gw['udpport'], $w);
     $lauf = bw_lauf_lesen();
-    $zeilen[] = bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']);
-    $zeilen[] = bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']);
-    $zeilen[] = bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']);
+    $werte['status/ts'] = (int) $lauf['ts'];
+    $werte['status/zaehler'] = (int) $lauf['zaehler'];
+    $werte['status/ok'] = (int) $lauf['ok'];
+    /* Die Altwerte, die der Broker noch haelt (oder alle, wenn er nicht zu
+       fragen war), bekommen eine leere retain-Nutzlast UNMITTELBAR vor ihrem
+       gueltigen Wert - in derselben Verbindung, als Nachbarzeile (Fall N3).
+       Jedes der fuenf Altthemen hat in jedem Vollversand einen Wert (OK,
+       FENSTER, FEHLER, CODE aus bw_werte(), status/ok aus dem Lauf); eine
+       leere Nachricht ohne Wert dahinter entsteht hier also nicht. */
+    $weg = array_flip(bw_mqtt_altlast($w)['themen']);
+    $zeilen = array();
+    foreach ($werte as $t => $v) {
+        if (isset($weg[$t])) {
+            /* Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: genau
+               die Form, die das Gateway als Loeschung liest (Regeln/07,
+               Nachtrag 19.09.2026: mqttgateway.pl:281, :311-315, :357). */
+            $zeilen[] = 'retain ' . $w . '/' . $t . ' ';
+        }
+        $zeilen[] = bw_mqtt_zeile($w, $t, $v);
+    }
     return bw_mqtt_senden($gw['udpport'], $zeilen);
 }
 
@@ -1775,79 +1792,239 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
  * Eine Umstellung von retain auf publish loescht nichts: der alte Wert steht
  * im Broker weiter und wird nach jedem Neustart von Broker oder Gateway
  * wieder ausgeliefert. status/ok ging in 0.9.18 retained hinaus, ok,
- * fenster, fehler und code bis 0.9.19.
+ * fenster, fehler und code bis 0.9.19. Abgeraeumt wird nach der Antwort
+ * des Brokers (bw_mqtt_altlast()).
  */
 function bw_mqtt_altlast_liste()
 {
     return array('status/ok', 'ok', 'fenster', 'fehler', 'code');
 }
 
-if (!defined('BW_ALTLAST_RUNDEN')) {
-    define('BW_ALTLAST_RUNDEN', 3);
+/**
+ * Den Broker fragen, welche der Themen $themen er zurueckbehaelt - in EINER
+ * Verbindung, ein SUBSCRIBE mit allen Filtern.
+ *
+ * Rueckgabe array('lage' => 'ok'|'unbekannt', 'belegt' => array(thema => true)).
+ * 'ok' heisst: der Broker hat die Anmeldung (CONNACK 0) und JEDEN Filter
+ * (SUBACK-Rueckgabe unter 0x80) bestaetigt; was dann nicht unter 'belegt'
+ * steht, ist leer. 'unbekannt': er war nicht zu fragen (keine Wurzel, keine
+ * general.json, keine Verbindung, Anmeldung abgewiesen, Filter abgelehnt,
+ * keine Antwort).
+ *
+ * Warum ueberhaupt fragen: das Abraeumen laeuft ueber den UDP-Eingang des
+ * Gateways, und dort meldet fwrite() auch fuer ein verworfenes Datagramm
+ * Erfolg (Regeln/07, "Ein Absender merkt nichts davon", Nachtrag vom
+ * 19.09.2026 - der Anlass war diese Linie: der Merker der 0.9.19 stand, und
+ * beschattung/status/ok 1 lag am Geraet weiter im Broker). Belegt ist das
+ * Abraeumen erst, wenn der Broker selbst sagt, dass nichts mehr dasteht.
+ *
+ * MQTT 3.1.1 von Hand, nur CONNECT, SUBSCRIBE (QoS 0) und DISCONNECT - ohne
+ * fremde Bibliothek; Bauart ko_mqtt_behalten_liste() (KODI-NG 1.2.10), dort
+ * aus tb_mqtt_behalten_liste() (Spotpreis-Tibber 0.9.19). Anders als dort wird
+ * die SUBACK-Rueckgabe gelesen: ein Broker, der das Lesen verweigert (0x80),
+ * schickt danach nichts - ungeprueft hiesse das "nichts belegt", und der
+ * Merker laege auf einer Antwort, die keine war (in WSL gemessen,
+ * Pruefung-Beschattungswaechter-0.9.21, Fall N17). Belegt ist ein Thema nur
+ * am EMPFANGENEN Paket mit Retain-Merkmal und nicht leerer Nutzlast. Die
+ * Anmeldung nimmt Brokeruser/Brokerpass aus der general.json (Regeln/07,
+ * Abschnitt 2); das Kennwort steht nur im CONNECT-Paket, nie in einem
+ * Protokoll und nie auf einer Kommandozeile (Faelle N18, U9).
+ */
+function bw_mqtt_behalten_liste(array $themen)
+{
+    $aus = array('lage' => 'unbekannt', 'belegt' => array());
+    $soll = array();
+    foreach ($themen as $t) {
+        if ((string) $t !== '') { $soll[(string) $t] = true; }
+    }
+    if (!$soll) {
+        $aus['lage'] = 'ok';
+        return $aus;
+    }
+    $p = bw_paths();
+    if ($p['lbhome'] === '') { return $aus; }
+    $d = @json_decode((string) @file_get_contents(
+             $p['lbhome'] . '/config/system/general.json'), true);
+    if (!is_array($d) || !isset($d['Mqtt']) || !is_array($d['Mqtt'])) { return $aus; }
+    $m = $d['Mqtt'];
+    $hol = function ($k) use ($m) {
+        return (isset($m[$k]) && is_scalar($m[$k])) ? (string) $m[$k] : '';
+    };
+    $host = trim($hol('Brokerhost'));
+    if ($host === '' || $host === 'localhost') { $host = '127.0.0.1'; }
+    $port = (int) $hol('Brokerport');
+    if ($port <= 0 || $port > 65535) { $port = 1883; }
+    $benutzer = $hol('Brokeruser');
+    $kennwort = $hol('Brokerpass');
+
+    $errno = 0;
+    $errstr = '';
+    $s = @stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, 2);
+    if (!$s) { return $aus; }
+    stream_set_timeout($s, 1);
+
+    $zk = function ($t) { return pack('n', strlen($t)) . $t; };
+    $laenge = function ($n) {
+        $o = '';
+        do {
+            $b = $n % 128;
+            $n = intdiv($n, 128);
+            if ($n > 0) { $b |= 128; }
+            $o .= chr($b);
+        } while ($n > 0);
+        return $o;
+    };
+    /* Genau $n Bytes lesen oder null - bei Zeitablauf und Verbindungsende. */
+    $lies = function ($n) use ($s) {
+        $d = '';
+        while (strlen($d) < $n) {
+            $t = @fread($s, $n - strlen($d));
+            if ($t === false || $t === '') {
+                $meta = stream_get_meta_data($s);
+                if (!empty($meta['timed_out']) || !empty($meta['eof']) || feof($s)) { return null; }
+                continue;
+            }
+            $d .= $t;
+        }
+        return $d;
+    };
+    /* Ein Paket: array(kopfbyte, rumpf) oder null. */
+    $paket = function () use ($lies) {
+        $k = $lies(1);
+        if ($k === null) { return null; }
+        $n = 0;
+        $mult = 1;
+        for ($i = 0; $i < 4; $i++) {
+            $b = $lies(1);
+            if ($b === null) { return null; }
+            $n += (ord($b) & 127) * $mult;
+            $mult *= 128;
+            if (!(ord($b) & 128)) { break; }
+        }
+        $r = ($n > 0) ? $lies($n) : '';
+        return ($r === null) ? null : array(ord($k), $r);
+    };
+
+    $flags = 0x02;                                  // saubere Sitzung
+    $nutz = $zk('bwrueck' . getmypid());
+    if ($benutzer !== '') {
+        $flags |= 0x80;
+        // Ein Kennwort ohne Benutzer laesst MQTT 3.1.1 nicht zu.
+        if ($kennwort !== '') { $flags |= 0x40; }
+    }
+    $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 10);
+    if ($benutzer !== '') {
+        $nutz .= $zk($benutzer);
+        if ($kennwort !== '') { $nutz .= $zk($kennwort); }
+    }
+    if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+        $ack = $paket();
+        if ($ack !== null && ($ack[0] >> 4) === 2 && strlen($ack[1]) >= 2 && ord($ack[1][1]) === 0) {
+            $sub = pack('n', 1);
+            foreach (array_keys($soll) as $t) { $sub .= $zk($t) . chr(0); }
+            @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
+            $bestaetigt = false;
+            $abgelehnt = false;
+            $ende = microtime(true) + 3.0;
+            while (microtime(true) < $ende) {
+                $pk = $paket();
+                if ($pk === null) { break; }           // Zeitablauf: nichts mehr gekommen
+                $art = $pk[0] >> 4;
+                if ($art === 9) {
+                    /* Je Filter ein Rueckgabebyte hinter der Paketkennung;
+                       0x80 heisst abgelehnt. */
+                    $rc = (string) substr($pk[1], 2);
+                    if (strlen($rc) !== count($soll)) { $abgelehnt = true; }
+                    for ($i = 0; $i < strlen($rc); $i++) {
+                        if (ord($rc[$i]) >= 0x80) { $abgelehnt = true; }
+                    }
+                    if ($abgelehnt) { break; }
+                    $bestaetigt = true;
+                    // Zurueckbehaltenes kommt unmittelbar nach dem SUBACK.
+                    $ende = min($ende, microtime(true) + 1.0);
+                } elseif ($art === 3 && strlen($pk[1]) >= 2) {
+                    $tl = unpack('n', substr($pk[1], 0, 2));
+                    $t = substr($pk[1], 2, $tl[1]);
+                    $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+                    $wert = (string) substr($pk[1], $versatz);
+                    // Am empfangenen Paket: nur mit gesetztem Retain-Merkmal.
+                    if (isset($soll[$t]) && ($pk[0] & 1) && $wert !== '') {
+                        $aus['belegt'][$t] = true;
+                        if (count($aus['belegt']) === count($soll)) { break; }
+                    }
+                }
+            }
+            if ($bestaetigt && !$abgelehnt) {
+                $aus['lage'] = 'ok';
+            } else {
+                $aus['belegt'] = array();
+            }
+        }
+        @fwrite($s, chr(0xE0) . chr(0));
+    }
+    fclose($s);
+    return $aus;
 }
 
 /**
- * Die Altwerte aus bw_mqtt_altlast_liste() abraeumen - in drei Vollversaenden.
+ * Welche Altwerte muessen in diesem Vollversand noch abgeraeumt werden?
  *
- * Geloescht wird mit einer leeren Nutzlast und dem Befehlswort retain (am
- * Broker belegt 14.09.2026, Regeln/07), VOR den frischen Werten desselben
- * Vollversands: die leere Nachricht geht auch an die Abonnenten, und der
- * gueltige Wert folgt unmittelbar. Deshalb steht der Aufruf NUR in
- * bw_mqtt_publish() - der Lebenszeichenlauf schickt ok, fehler, code und
- * fenster nicht mit.
+ * Rueckgabe array('lage' => 'erledigt'|'belegt'|'unbekannt',
+ *                 'themen' => array(<thema ohne praefix>, ...)).
  *
- * DIE GRENZE: der einzige Weg dieser Linie ist der UDP-Eingang des
- * Gateways. Er bestaetigt nichts, verwirft unter Last Datagramme, und das
- * Senden meldet auch fuer ein verworfenes Erfolg (Regeln/07). Am Geraet
- * belegt am 19.09.2026: der Merker der 0.9.19 stand, und
- * beschattung/status/ok 1 lag weiter im Broker. Nachlesen kann die Linie
- * nicht - sie hat keine eigene Verbindung zum Broker. Deshalb geht die
- * Loeschung in DREI Vollversaenden hinaus (je mindestens einen Abstand
- * auseinander, so dass nicht derselbe Verwurfschub alle trifft), und der
- * Merker zaehlt nur Runden, deren Datagramme vollstaendig geschrieben
- * wurden. Er sagt damit "dreimal gesendet", nicht "geloescht"; die README
- * nennt das.
+ * Je Vollversand, bis der Merker liegt: den Broker nach allen Themen aus
+ * bw_mqtt_altlast_liste() fragen (bw_mqtt_behalten_liste()); keines belegt ->
+ * Merker schreiben, nichts abraeumen ('erledigt'); einige belegt -> genau
+ * diese ('belegt'), kein Merker, der naechste Vollversand fragt wieder; nicht
+ * zu fragen -> alle ('unbekannt'), KEIN Merker - dann raeumt jeder
+ * Vollversand ab. Der Merker entsteht NUR aus der Antwort des Brokers, nie
+ * aus dem Senden (Regeln/07 Nachtrag 19.09.2026; Faelle R8, N5, N10). Bis
+ * 0.9.20 zaehlte er drei gesendete Runden - "dreimal gesendet" ist nicht
+ * "geloescht".
  *
- * Die Kennung im Merker ist Praefix plus Themenliste (Bauart Weissware
- * 0.9.28): wer das Praefix umstellt, bekommt unter dem neuen Stamm eine
- * eigene Abraeumung, und der Merker der 0.9.19 (retain_status_ok_geloescht)
- * gilt nicht als erledigt (Faelle R8, R11, R12). Der Installer raeumt den
- * Datenordner bei jedem Update ab - dann beginnt die Zaehlung neu.
+ * Der Merker traegt die Kennung "leer-bestaetigt <praefix>: <Themenliste>" in
+ * einer eigenen Datei: ein anderes Praefix oder eine andere Liste gilt nicht
+ * (Fall N15), und die Merker der 0.9.19 (retain_status_ok_geloescht) und der
+ * 0.9.20 (retain_altlast) haben einen anderen Ort und gelten deshalb
+ * ebenfalls nicht (Fall N14). purge_installation raeumt ihn bei jedem Update
+ * mit ab; dann wird einmal nachgefragt. Bauart ko_mqtt_altlast() (KODI-NG
+ * 1.2.10), dort aus tb_mqtt_altlast() (Spotpreis-Tibber 0.9.19).
  */
-function bw_mqtt_altlast_abraeumen($port, $praefix)
+function bw_mqtt_altlast($praefix)
 {
+    $praefix = (string) $praefix;
+    $liste = bw_mqtt_altlast_liste();
     $p = bw_paths();
-    $merker = $p['datadir'] . '/retain_altlast';
-    $kennung = $praefix . ' ' . implode(',', bw_mqtt_altlast_liste());
-    $runde = 0;
-    $roh = is_file($merker) ? @file($merker, FILE_IGNORE_NEW_LINES) : false;
-    if (is_array($roh) && isset($roh[0], $roh[1]) && $roh[0] === $kennung
-        && preg_match('/^[0-9]{1,3}$/', $roh[1]) === 1) {
-        $runde = (int) $roh[1];
+    $merker = $p['datadir'] . '/retain_altlast_bestaetigt';
+    $kennung = 'leer-bestaetigt ' . $praefix . ': ' . implode(' ', $liste);
+    if (is_file($merker) && trim((string) @file_get_contents($merker)) === $kennung) {
+        return array('lage' => 'erledigt', 'themen' => array());
     }
-    if ($runde >= BW_ALTLAST_RUNDEN) {
-        return false;
+    $voll = array();
+    foreach ($liste as $t) { $voll[] = $praefix . '/' . $t; }
+    $f = bw_mqtt_behalten_liste($voll);
+    if ($f['lage'] === 'ok' && !$f['belegt']) {
+        if (!is_dir($p['datadir'])) { @mkdir($p['datadir'], 0775, true); }
+        if (@file_put_contents($merker, $kennung . "\n") !== false) {
+            bw_log('MQTT: unter ' . $praefix . '/ steht keiner der frueher zurueckbehaltenen Werte '
+                . 'mehr im Broker (' . implode(', ', $liste) . '; vom Broker bestaetigt).');
+        }
+        return array('lage' => 'erledigt', 'themen' => array());
     }
-    $zeilen = array();
-    foreach (bw_mqtt_altlast_liste() as $t) {
-        /* Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: genau die
-           Form, die das Gateway als Loeschung liest (Regeln/07, Nachtrag
-           19.09.2026: mqttgateway.pl:281, :311-315, :357). */
-        $zeilen[] = 'retain ' . $praefix . '/' . $t . ' ';
+    if ($f['lage'] === 'ok') {
+        $l = strlen($praefix) + 1;
+        $t = array();
+        foreach (array_keys($f['belegt']) as $v) { $t[] = substr($v, $l); }
+        bw_log_wenn_neu('altlast_belegt', 'MQTT: im Broker stehen noch zurueckbehaltene Altwerte unter '
+            . $praefix . '/ (' . implode(', ', $t) . ') - sie gehen mit leerer Nutzlast unmittelbar '
+            . 'vor dem gueltigen Wert hinaus; der naechste Vollversand fragt wieder nach.');
+        return array('lage' => 'belegt', 'themen' => $t);
     }
-    if (bw_mqtt_senden($port, $zeilen) !== count($zeilen)) {
-        return false;
-    }
-    $runde++;
-    if (!is_dir($p['datadir'])) {
-        @mkdir($p['datadir'], 0775, true);
-    }
-    @file_put_contents($merker, $kennung . "\n" . $runde . "\n");
-    bw_log('MQTT: zurueckbehaltene Altwerte unter ' . $praefix . '/ ('
-        . implode(', ', bw_mqtt_altlast_liste()) . ') mit leerer Nutzlast an den '
-        . 'UDP-Eingang geschickt, Runde ' . $runde . ' von ' . BW_ALTLAST_RUNDEN
-        . '. Der Eingang bestaetigt nichts - siehe README.');
-    return true;
+    bw_log_wenn_neu('altlast_unbekannt', 'MQTT: der Broker liess sich nicht befragen (Brokerhost, '
+        . 'Brokerport und Zugangsdaten in general.json) - die frueher zurueckbehaltenen Werte unter '
+        . $praefix . '/ (' . implode(', ', $liste) . ') gehen deshalb in jedem Vollversand mit leerer '
+        . 'Nutzlast unmittelbar vor dem gueltigen Wert hinaus. Siehe README.', 86400);
+    return array('lage' => 'unbekannt', 'themen' => $liste);
 }
 
 /** NUR die drei Lebenszeichen - fuer einen Lauf, der sonst nichts zu sagen hat. */
@@ -1858,7 +2035,8 @@ function bw_mqtt_lebenszeichen(?array $c = null)
     $gw = bw_mqtt_gateway_info();
     if ($gw === null || $gw['udpport'] === 0) { return 0; }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
-    /* Kein Abraeumen hier: dieser Lauf schickt ok, fehler, code und fenster
+    /* Kein Abraeumen und keine Rueckfrage beim Broker hier: dieser Lauf
+       schickt ok, fehler, code und fenster
        nicht mit, und eine leere Nachricht ohne den gueltigen Wert dahinter
        kaeme am Miniserver als leerer Wert an (Regeln/07). Abgeraeumt wird im
        Vollversand, bw_mqtt_publish(). */
@@ -1901,13 +2079,19 @@ function bw_mqtt_leer_themen()
  * Die zurueckbehaltenen Themen leeren - fuer uninstall/uninstall
  * (bw_lauf.php --mqtt-leeren). Schreibt kein Protokoll und legt nichts an.
  *
- * Der Weg ist der einzige, den die Linie hat: der UDP-Eingang des Gateways,
- * dieselbe Loeschform wie bw_mqtt_altlast_abraeumen(). GRENZE: er bestaetigt
- * nichts und verwirft unter Last Datagramme; nachlesen laesst sich ohne
- * eigene Brokerverbindung nicht. Deshalb geht jede Loeschung $runden-mal
- * hinaus, mit Pause dazwischen - das senkt den Verlust, beseitigt ihn nicht
- * (Bauart Weissware 0.9.30). Rueckgabe 0 gesendet, 1 Senden gescheitert,
- * 2 nicht moeglich.
+ * Geloescht wird ueber den UDP-Eingang des Gateways, "retain <thema> " mit
+ * leerer Nutzlast. VOR der ersten Runde und nach jeder wird der Broker
+ * gefragt (bw_mqtt_behalten_liste()); hinaus geht nur, was dort noch steht,
+ * hoechstens $runden Runden. Steht nichts da, geht nichts hinaus. Ist der
+ * Broker nicht zu fragen, gehen alle Themen in jeder Runde hinaus, und die
+ * Ausgabe sagt, dass nicht nachgelesen wurde - der Eingang verwirft unter
+ * Last Datagramme (Regeln/07), ein blosses Senden ist kein Beleg. Bis 0.9.20
+ * gingen alle Themen dreimal blind hinaus (Faelle U1 bis U8). Bauart
+ * ko_mqtt_leeren() (KODI-NG 1.2.10), dort aus tb_mqtt_leeren()
+ * (Spotpreis-Tibber 0.9.19).
+ *
+ * Rueckgabe 0 geleert oder nicht nachpruefbar, 1 es steht noch etwas bzw.
+ * der Eingang war nicht erreichbar, 2 nicht moeglich.
  */
 function bw_mqtt_leeren($runden = 3, $pause_us = 1000000)
 {
@@ -1919,31 +2103,64 @@ function bw_mqtt_leeren($runden = 3, $pause_us = 1000000)
            . 'zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.' . "\n";
         return 2;
     }
-    $themen = bw_mqtt_leer_themen();
-    $n = 0;
-    for ($r = 1; $r <= $runden; $r++) {
-        $fp = @stream_socket_client('udp://127.0.0.1:' . (int) $gw['udpport'], $eno, $etxt, 2);
-        if (!$fp) {
-            echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
-               . (int) $gw['udpport'] . ') - zurueckbehaltene Themen unter ' . $w
-               . '/ wurden nicht geleert.' . "\n";
-            return 1;
+    $alle = array();
+    foreach (bw_mqtt_leer_themen() as $t) { $alle[] = $w . '/' . $t; }
+    $n = count($alle);
+    $f = bw_mqtt_behalten_liste($alle);
+    $nachgelesen = ($f['lage'] === 'ok');
+    $offen = $nachgelesen ? array_keys($f['belegt']) : $alle;
+    if ($nachgelesen && !$offen) {
+        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen unter ' . $w
+           . '/ steht zurueckbehalten - nichts zu leeren.' . "\n";
+        return 0;
+    }
+    $eno = 0;
+    $etxt = '';
+    $fp = @stream_socket_client('udp://127.0.0.1:' . (int) $gw['udpport'], $eno, $etxt, 2);
+    if (!$fp) {
+        echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
+           . (int) $gw['udpport'] . ') - zurueckbehaltene Themen unter ' . $w
+           . '/ wurden nicht geleert.' . "\n";
+        return 1;
+    }
+    $zu_leeren = count($offen);
+    $datagramme = 0;
+    $gelaufen = 0;
+    for ($r = 1; $r <= max(1, (int) $runden) && $offen; $r++) {
+        if ($r > 1) { usleep((int) $pause_us); }
+        $gelaufen = $r;
+        foreach ($offen as $t) {
+            // Ein Leerzeichen hinter dem Thema, sonst keine Nutzlast: die
+            // Form, die das Gateway als Loeschung liest.
+            if (@fwrite($fp, 'retain ' . $t . ' ') !== false) { $datagramme++; }
         }
-        foreach ($themen as $t) {
-            if (@fwrite($fp, 'retain ' . $w . '/' . $t . ' ') !== false) {
-                $n++;
-            }
-        }
-        fclose($fp);
-        if ($r < $runden) {
-            usleep((int) $pause_us);
+        usleep(300000);     // dem Gateway Zeit bis zum Broker lassen
+        $f = bw_mqtt_behalten_liste($offen);
+        if ($f['lage'] === 'ok') {
+            $nachgelesen = true;
+            $offen = array_keys($f['belegt']);
+        } else {
+            $nachgelesen = false;
         }
     }
-    echo '<OK> MQTT: ' . count($themen) . ' zurueckbehaltene Themen unter ' . $w . '/ je '
-       . $runden . '-mal mit leerer Nutzlast an den UDP-Eingang geschickt (' . $n
-       . ' Datagramme).' . "\n";
-    echo '<INFO> Der UDP-Eingang bestaetigt nichts und verwirft unter Last Datagramme; ob der '
-       . 'Broker die Themen geloescht hat, laesst sich von hier aus nicht nachlesen.' . "\n";
+    fclose($fp);
+    echo '<INFO> MQTT: ' . $zu_leeren . ' von ' . $n . ' Themen unter ' . $w . '/ mit leerer Nutzlast '
+       . 'an den UDP-Eingang ' . (int) $gw['udpport'] . ' des Gateways gesendet (' . $gelaufen
+       . ' Runde(n), ' . $datagramme . ' Datagramme).' . "\n";
+    if ($nachgelesen && !$offen) {
+        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen steht mehr '
+           . 'zurueckbehalten.' . "\n";
+        return 0;
+    }
+    if ($nachgelesen) {
+        echo '<WARNING> MQTT: ' . count($offen) . ' Themen stehen noch zurueckbehalten im Broker ('
+           . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
+           . '). Von Hand: mosquitto_pub -r -n -t <thema> (mit den Broker-Zugangsdaten).' . "\n";
+        return 1;
+    }
+    echo '<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang '
+       . 'verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit '
+       . 'mosquitto_pub -r -n -t <thema> von Hand loeschen.' . "\n";
     return 0;
 }
 
