@@ -100,6 +100,8 @@ $bw_cfg = bw_config();
    Uebernehmen wurde sie nicht mitgemessen. */
 $bw_meldungen = array();
 $bw_fehler = array();
+/* X-2: die eingetippten Werte eines beanstandeten Formulars (bw_eingaben_sammeln()). */
+$bw_eingaben = null;
 
 /* ---------------------------------------------------------------- *
  * Der Wachposten - EIN Posten, vor allen Handlern.
@@ -127,16 +129,21 @@ $bw_cfg = bw_config();
 
 /* ---------------- Einstellungen speichern ----------------
  *
- * Beanstandet wird je Feld, und was sich nicht beanstanden laesst, wird
- * gespeichert. Bis 0.9.10 verhinderte eine unbrauchbare Kennung das
- * Speichern ALLER Felder - der Benutzer tippte dann Zeitfenster und Abstand
- * noch einmal, wegen eines Feldes, das er ohnehin gleich korrigiert haette.
- * Blockieren darf nur, was das Speichern technisch unmoeglich macht.
+ * Beanstandet wird je Feld - und BEI EINER BEANSTANDUNG WIRD NICHTS
+ * GESPEICHERT, auch nicht die uebrigen Felder (Entscheidung 16 vom
+ * 30.09.2026, Regeln/04). Bis 0.9.23 speicherte der Handler alles Uebrige,
+ * damit niemand Zeitfenster und Abstand neu tippen musste; das leistet jetzt
+ * X-2: die eingetippten Werte stehen nach der Umleitung wieder im Formular,
+ * das beanstandete Feld ist rot umrandet. "Gespeichert" neben "beanstandet"
+ * sagte zwei Dinge zugleich. Eine halb ausgefuellte Zielzeile ist eine
+ * Beanstandung wie jede andere.
  *
  * Geprueft wird mit bw_wert_pruefen() - derselben Positivliste, gegen die
  * auch die Sicherungsdatei und die Konfigurationsdatei gehalten werden. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     $bw_neu = $bw_cfg;
+    /* Die Felder, die eine Beanstandung ausloesten (X-2). */
+    $bw_beanstandet = array();
     $bw_neu['aktiv'] = empty($_POST['aktiv']) ? 0 : 1;
 
     /* Der Miniserver wird ueber seinen SCHLUESSEL gespeichert, nicht ueber
@@ -151,9 +158,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     } elseif ($bw_wahl !== '') {
         $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
                                bw_e(bw_t('TEXT.L_MS')), bw_e(bw_kurz($bw_wahl)));
+        $bw_beanstandet[] = 'ms_nr';
     }
 
-    $bw_felderliste = array('uuid', 'befehl', 'von', 'bis', 'abstand');
+    $bw_felderliste = array('uuid', 'befehl', 'von', 'bis', 'abstand',
+                            'wetter_token', 'sonne_min', 'wind_max');
     for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
         $bw_felderliste[] = 'uuid' . $bw_i;
         $bw_felderliste[] = 'befehl' . $bw_i;
@@ -172,11 +181,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
                 $bw_nr = substr($bw_f, strlen($bw_grund));
                 $bw_bez .= ' (' . bw_t('TEXT.ZIEL') . ' ' . ($bw_nr !== '' ? $bw_nr : '1') . ')';
             }
+            /* Das Wortzeichen der Ecowitt-Weiche erscheint nie in einer
+               Meldung, nur seine Laenge (Wetter-1). */
+            $bw_zeige = ($bw_f === 'wetter_token' && is_string($bw_w))
+                ? sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($bw_w)) : bw_kurz($bw_w);
             $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
-                                   bw_e($bw_bez), bw_e(bw_kurz($bw_w)));
+                                   bw_e($bw_bez), bw_e($bw_zeige));
+            $bw_beanstandet[] = $bw_f;
         }
     }
     $bw_neu['pruefen_ein'] = empty($_POST['pruefen_ein']) ? 0 : 1;
+    $bw_neu['wetter_ein'] = empty($_POST['wetter_ein']) ? 0 : 1;
     /* EINE HALB AUSGEFUELLTE ZEILE WIRD GENANNT, NICHT UEBERGANGEN.
        Seit 0.9.13 darf der Befehl eines weiteren Ziels leer sein - so raeumt
        man es aus. Steht dann aber noch eine Kennung da, wird diese Zeile
@@ -187,11 +202,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         $bw_hb = isset($bw_neu['befehl' . $bw_i]) ? trim((string) $bw_neu['befehl' . $bw_i]) : '';
         if ($bw_hu !== '' && $bw_hb === '') {
             $bw_fehler[] = sprintf(bw_t('TEXT.ZIEL_HALB'), $bw_i);
+            $bw_beanstandet[] = 'befehl' . $bw_i;
         }
     }
-    if (bw_config_speichern($bw_neu)) {
-        $bw_meldungen[] = $bw_fehler
-            ? bw_t('TEXT.GESPEICHERT_TEILWEISE') : bw_t('TEXT.GESPEICHERT');
+    if ($bw_beanstandet) {
+        /* Entscheidung 16: nichts speichern; die Eingaben reisen mit (X-2). */
+        $bw_fehler[] = bw_t('TEXT.EINGABEN_ZURUECK');
+        $bw_eingaben = bw_eingaben_sammeln('settings', $_POST, $bw_beanstandet);
+    } elseif (bw_config_speichern($bw_neu)) {
+        $bw_meldungen[] = bw_t('TEXT.GESPEICHERT');
         $bw_cfg = bw_config();
         /* M1: eingeschaltet und Ziele gehen sofort hinaus, nicht erst mit dem
            naechsten Befehl - bis 0.9.21 stand nach dem Abschalten ueber MQTT
@@ -220,16 +239,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
         $bw_th = bw_vorgaben()['mqtt_thema'];
         $bw_meldungen[] = sprintf(bw_t('MQTT.PRAEFIX_VORGABE'), bw_e($bw_th));
     }
+    $bw_mq_beanstandet = array();
     if (bw_wert_pruefen('mqtt_thema', $bw_th)) {
         $bw_neu['mqtt_thema'] = $bw_th;
     } else {
         $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
                                bw_e(bw_t('TEXT.L_THEMA')), bw_e(bw_kurz($bw_th)));
+        $bw_mq_beanstandet[] = 'mqtt_thema';
     }
     $bw_vorher = $bw_cfg;
-    if (bw_config_speichern($bw_neu)) {
-        $bw_meldungen[] = $bw_fehler
-            ? bw_t('TEXT.GESPEICHERT_TEILWEISE') : bw_t('TEXT.GESPEICHERT');
+    if ($bw_mq_beanstandet) {
+        /* Entscheidung 16: nichts speichern, auch nicht den Haken; die
+           Eingaben reisen mit (X-2). */
+        $bw_fehler[] = bw_t('TEXT.EINGABEN_ZURUECK');
+        $bw_eingaben = bw_eingaben_sammeln('mqtt', $_POST, $bw_mq_beanstandet);
+    } elseif (bw_config_speichern($bw_neu)) {
+        $bw_meldungen[] = bw_t('TEXT.GESPEICHERT');
         $bw_cfg = bw_config();
         /* M2 und M4: nach einem Praefixwechsel oder dem Abschalten werden die
            zurueckbehaltenen Themen des bisherigen Praefixes abgeraeumt und
@@ -337,14 +362,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])
 /* ---------------- Die Automatiken jetzt zaehlen ---------------- */
 $bw_zaehlung = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['zaehlen'])) {
-    list($bw_zok, $bw_zmeldung, $bw_zerg) = bw_automatiken($bw_cfg);
-    /* Eine Stelle fuer alle drei Wege (C3): ein Fehlschlag wird vermerkt, die
-       gezaehlten Werte bleiben stehen, OK geht auf 0. */
-    bw_stand_schreiben(bw_zaehlung_eintragen(bw_stand_lesen(), $bw_zok, $bw_zerg));
-    if ($bw_zok) {
-        $bw_zaehlung = $bw_zerg;
+    /* DIESELBE SPERRE WIE DER TAKT (a1, Verbesserungsbau 30.09.2026). Takt
+       und Endpunkt (aktion=pruefen) zaehlen nur unter lauf.lock; bis 0.9.23
+       zaehlte dieser Knopf ohne sie. Lief der Takt gerade, fragte der Knopf
+       den Miniserver ein zweites Mal ab (bis zu 1 + 3x40 Abrufe) und konnte
+       dessen gleichzeitig geschriebenen Stand ueberschreiben. Nicht
+       blockierend wie "Befehl jetzt senden": wer nicht drankommt, bekommt eine
+       Meldung - gezaehlt und geschrieben wird dann nichts. Der Stand wird erst
+       unter der Sperre gelesen. */
+    $bw_zlock = bw_sperre();
+    if ($bw_zlock === false) {
+        $bw_fehler[] = bw_t('TEXT.BESETZT_ZAEHLEN');
     } else {
-        $bw_fehler[] = $bw_zmeldung;
+        list($bw_zok, $bw_zmeldung, $bw_zerg) = bw_automatiken($bw_cfg);
+        /* Eine Stelle fuer alle drei Wege (C3): ein Fehlschlag wird vermerkt, die
+           gezaehlten Werte bleiben stehen, OK geht auf 0. */
+        bw_stand_schreiben(bw_zaehlung_eintragen(bw_stand_lesen(), $bw_zok, $bw_zerg));
+        fclose($bw_zlock);
+        if ($bw_zok) {
+            $bw_zaehlung = $bw_zerg;
+        } else {
+            $bw_fehler[] = $bw_zmeldung;
+        }
     }
 }
 
@@ -361,6 +400,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
     if ($bw_lock === false) {
         $bw_fehler[] = bw_t('TEXT.BESETZT');
     } else {
+        /* Die Positionen VOR dem Befehl (b1) - nicht bei der Probe, und null,
+           wenn die Wirkungsmessung aus ist. */
+        $bw_vorher = $bw_ist_probe ? null : bw_wirkung_vorher($bw_cfg);
         if ($bw_ist_probe) { bw_trocken(true); }
         try {
             foreach (bw_ziele($bw_cfg) as $bw_z) {
@@ -384,6 +426,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
                Code des ERSTEN Fehlschlags statt des letzten Ziels, letzte_ok
                nur, wenn alle Ziele angenommen haben. */
             $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
+            $bw_st = bw_wirkung_beginnen($bw_st, $bw_vorher, $bw_ergebnisse);
             bw_stand_schreiben($bw_st);
             /* takt = false: der Knopf im Reiter Test sagt etwas ueber DIESEN
                Befehl und nichts darueber, ob der Fuenfminutenlauf noch geht -
@@ -486,7 +529,8 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
                                   'fehler' => array_values($bw_fehler),
                                   'ergebnisse' => array_values($bw_ergebnisse),
                                   'zaehlung' => $bw_zaehlung,
-                                  'tab' => $bw_tab))) {
+                                  'tab' => $bw_tab,
+                                  'eingaben' => $bw_eingaben))) {
         header('Location: index.php?form=' . substr($bw_tab, 4), true, 303);
         exit;
     }
@@ -502,8 +546,13 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
         if (in_array($bw_einmal['tab'], $bw_reiter, true)) {
             $bw_tab = $bw_einmal['tab'];
         }
+        $bw_eingaben = $bw_einmal['eingaben'];
     }
 }
+
+/* X-2: was die Formulare zeigen - nach einer Beanstandung die eingetippten
+   Werte, sonst die gespeicherten (bw_formwert(), bw_formhaken(), bw_markiert()). */
+$bw_eg = $bw_eingaben;
 
 if ($bw_rahmen) {
     LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
@@ -606,6 +655,11 @@ if ($bw_rahmen) {
 .sm-row { display: flex; gap: 12px; flex-wrap: wrap; }
 .sm-row > div { flex: 1 1 220px; }
 .sm-grau { color: #999; font-style: italic; }
+/* Eigene Zutat (b1, Verbesserungsbau 30.09.2026): die Wirkungszeile in der
+   Kachel "zuletzt gesendet" - nicht aus der Vorlage des Hausstandards. */
+.sm-kachel .sm-wirkung { display: block; max-width: 340px; margin-top: 4px; color: #33691e; }
+/* Eigene Zutat (X-2): ein beanstandetes Feld nach der Umleitung. */
+.sm-wrap .sm-beanstandet { outline: 2px solid #c62828; outline-offset: 1px; background: #ffebee; }
 </style>
 
 <div class="sm-wrap">
@@ -661,17 +715,21 @@ if ($bw_ms_fehlt) {
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="aktiv" value="1"<?= !empty($bw_cfg['aktiv']) ? ' checked' : '' ?>>
+  <label<?= bw_markiert($bw_eg, 'aktiv') ?>><input data-role="none" type="checkbox" name="aktiv" value="1"<?= bw_formhaken($bw_eg, 'aktiv', $bw_cfg['aktiv']) ? ' checked' : '' ?>>
     <?php echo bw_t('TEXT.L_AKTIV'); ?></label>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_AKTIV'); ?></p>
 </div>
 
 <div class="sm-feld">
   <label><?php echo bw_t('TEXT.L_MS'); ?></label>
-  <select data-role="none" name="ms_nr">
+  <select data-role="none" name="ms_nr"<?= bw_markiert($bw_eg, 'ms_nr') ?>>
 <?php
+/* X-2: nach einer Beanstandung die eingetippte Wahl, sonst wie bisher der
+   gewaehlte (oder der fehlende, O2) Miniserver. */
+$bw_ms_wahl = bw_formwert($bw_eg, 'ms_nr',
+    $bw_ms_fehlt ? $bw_ms_nr : ($bw_gewaehlt !== null ? $bw_gewaehlt['nr'] : ''));
 foreach ($bw_ms as $bw_m2) { ?>
-    <option value="<?= bw_e($bw_m2['nr']) ?>"<?= ($bw_gewaehlt !== null && $bw_gewaehlt['nr'] === $bw_m2['nr']) ? ' selected' : '' ?>><?= bw_e($bw_m2['name'] . ' (' . $bw_m2['adresse'] . ')') ?></option>
+    <option value="<?= bw_e($bw_m2['nr']) ?>"<?= ($bw_ms_wahl === $bw_m2['nr']) ? ' selected' : '' ?>><?= bw_e($bw_m2['name'] . ' (' . $bw_m2['adresse'] . ')') ?></option>
 <?php } ?>
 <?php
 /* O2: fehlt der eingestellte Miniserver, steht er als markierte Option da -
@@ -680,7 +738,7 @@ foreach ($bw_ms as $bw_m2) { ?>
    dem naechsten beliebigen Speichern ging "Befehl jetzt senden" an einen
    anderen Miniserver (gemessen, Pruefbericht Oberflaeche O2). */
 if ($bw_ms_fehlt) { ?>
-    <option value="<?= bw_e($bw_ms_nr) ?>" selected><?= bw_e(sprintf(bw_t('TEXT.MS_FEHLT_OPTION'), $bw_ms_nr)) ?></option>
+    <option value="<?= bw_e($bw_ms_nr) ?>"<?= ($bw_ms_wahl === $bw_ms_nr) ? ' selected' : '' ?>><?= bw_e(sprintf(bw_t('TEXT.MS_FEHLT_OPTION'), $bw_ms_nr)) ?></option>
 <?php } ?>
 <?php if (!$bw_ms && !$bw_ms_fehlt) { ?><option value=""><?php echo bw_t('TEXT.KEIN_MS'); ?></option><?php } ?>
   </select>
@@ -689,13 +747,13 @@ if ($bw_ms_fehlt) { ?>
 
 <div class="sm-feld">
   <label><?php echo bw_t('TEXT.L_UUID'); ?></label>
-  <input data-role="none" type="text" name="uuid" value="<?= bw_e($bw_cfg['uuid']) ?>">
+  <input data-role="none" type="text" name="uuid" value="<?= bw_e(bw_formwert($bw_eg, 'uuid', $bw_cfg['uuid'])) ?>"<?= bw_markiert($bw_eg, 'uuid') ?>>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_UUID'); ?></p>
 </div>
 
 <div class="sm-feld">
   <label><?php echo bw_t('TEXT.L_BEFEHL'); ?></label>
-  <input data-role="none" type="text" name="befehl" value="<?= bw_e($bw_cfg['befehl']) ?>">
+  <input data-role="none" type="text" name="befehl" value="<?= bw_e(bw_formwert($bw_eg, 'befehl', $bw_cfg['befehl'])) ?>"<?= bw_markiert($bw_eg, 'befehl') ?>>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_BEFEHL'); ?></p>
 </div>
 
@@ -707,14 +765,14 @@ if ($bw_ms_fehlt) { ?>
 <?php for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
     $bw_ku = 'uuid' . $bw_i; $bw_kb = 'befehl' . $bw_i; ?>
   <tr><td><?= (int) $bw_i ?></td>
-      <td><input data-role="none" type="text" name="<?= $bw_ku ?>" value="<?= bw_e(isset($bw_cfg[$bw_ku]) ? $bw_cfg[$bw_ku] : '') ?>"></td>
-      <td><input data-role="none" type="text" name="<?= $bw_kb ?>" value="<?= bw_e(isset($bw_cfg[$bw_kb]) ? $bw_cfg[$bw_kb] : '') ?>"></td></tr>
+      <td><input data-role="none" type="text" name="<?= $bw_ku ?>" value="<?= bw_e(bw_formwert($bw_eg, $bw_ku, isset($bw_cfg[$bw_ku]) ? $bw_cfg[$bw_ku] : '')) ?>"<?= bw_markiert($bw_eg, $bw_ku) ?>></td>
+      <td><input data-role="none" type="text" name="<?= $bw_kb ?>" value="<?= bw_e(bw_formwert($bw_eg, $bw_kb, isset($bw_cfg[$bw_kb]) ? $bw_cfg[$bw_kb] : '')) ?>"<?= bw_markiert($bw_eg, $bw_kb) ?>></td></tr>
 <?php } ?>
 </table>
 </div>
 
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="pruefen_ein" value="1"<?= !empty($bw_cfg['pruefen_ein']) ? ' checked' : '' ?>>
+  <label<?= bw_markiert($bw_eg, 'pruefen_ein') ?>><input data-role="none" type="checkbox" name="pruefen_ein" value="1"<?= bw_formhaken($bw_eg, 'pruefen_ein', $bw_cfg['pruefen_ein']) ? ' checked' : '' ?>>
     <?php echo bw_t('TEXT.L_PRUEFEN'); ?></label>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_PRUEFEN'); ?></p>
 </div>
@@ -722,18 +780,44 @@ if ($bw_ms_fehlt) { ?>
 <div class="sm-row">
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_VON'); ?></label>
-    <input data-role="none" type="text" name="von" value="<?= bw_e($bw_cfg['von']) ?>" placeholder="06:00">
+    <input data-role="none" type="text" name="von" value="<?= bw_e(bw_formwert($bw_eg, 'von', $bw_cfg['von'])) ?>" placeholder="06:00"<?= bw_markiert($bw_eg, 'von') ?>>
   </div>
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_BIS'); ?></label>
-    <input data-role="none" type="text" name="bis" value="<?= bw_e($bw_cfg['bis']) ?>" placeholder="21:00">
+    <input data-role="none" type="text" name="bis" value="<?= bw_e(bw_formwert($bw_eg, 'bis', $bw_cfg['bis'])) ?>" placeholder="21:00"<?= bw_markiert($bw_eg, 'bis') ?>>
   </div>
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_ABSTAND'); ?></label>
-    <input data-role="none" type="text" name="abstand" value="<?= (int) $bw_cfg['abstand'] ?>">
+    <input data-role="none" type="text" name="abstand" value="<?= bw_e(bw_formwert($bw_eg, 'abstand', (int) $bw_cfg['abstand'])) ?>"<?= bw_markiert($bw_eg, 'abstand') ?>>
   </div>
 </div>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_FENSTER'); ?></p>
+
+<!-- Wetter-1 (Verbesserungsbau 30.09.2026): die Ecowitt-Weiche als Quelle
+     fuer Sonne und Wind, ab Werk aus. -->
+<h3><?php echo bw_t('TEXT.H_WETTER'); ?></h3>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_WETTER_ERKL'); ?></p>
+<div class="sm-feld">
+  <label<?= bw_markiert($bw_eg, 'wetter_ein') ?>><input data-role="none" type="checkbox" name="wetter_ein" value="1"<?= bw_formhaken($bw_eg, 'wetter_ein', $bw_cfg['wetter_ein']) ? ' checked' : '' ?>>
+    <?php echo bw_t('TEXT.L_WETTER_EIN'); ?></label>
+</div>
+<div class="sm-row">
+  <div class="sm-feld">
+    <label><?php echo bw_t('TEXT.L_WETTER_TOKEN'); ?></label>
+    <!-- Das Wortzeichen reist nach einer Beanstandung NICHT mit (X-2): das
+         Feld zeigt den gespeicherten Stand und wird nur markiert. -->
+    <input data-role="none" type="text" name="wetter_token" value="<?= bw_e($bw_cfg['wetter_token']) ?>" autocomplete="off"<?= bw_markiert($bw_eg, 'wetter_token') ?>>
+  </div>
+  <div class="sm-feld">
+    <label><?php echo bw_t('TEXT.L_SONNE_MIN'); ?></label>
+    <input data-role="none" type="text" name="sonne_min" value="<?= bw_e(bw_formwert($bw_eg, 'sonne_min', (int) $bw_cfg['sonne_min'])) ?>"<?= bw_markiert($bw_eg, 'sonne_min') ?>>
+  </div>
+  <div class="sm-feld">
+    <label><?php echo bw_t('TEXT.L_WIND_MAX'); ?></label>
+    <input data-role="none" type="text" name="wind_max" value="<?= bw_e(bw_formwert($bw_eg, 'wind_max', (int) $bw_cfg['wind_max'])) ?>"<?= bw_markiert($bw_eg, 'wind_max') ?>>
+  </div>
+</div>
+<p class="sm-hilfe"><?= sprintf(bw_t('TEXT.H_WETTER_FELDER'), (int) round(bw_wetter_frist() / 60)) ?></p>
 
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
@@ -744,6 +828,14 @@ if ($bw_ms_fehlt) { ?>
 <h2><?= bw_t('TEXT.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= bw_t('TEXT.SICH_ERKLAERUNG') ?></div>
 <div class="sm-hinweis"><?= bw_t('TEXT.SICH_INHALT') ?></div>
+<?php
+/* X-3 (Verbesserungsbau 30.09.2026): ein gespeicherter Wert, den das eigene
+   Zurueckspielen abweisen wuerde - gelb, nur die Namen. Die Sicherung wird
+   trotzdem geliefert und traegt den Kopf _warnung. */
+$bw_altwerte = bw_rueckspiel_altwerte();
+if ($bw_altwerte) { ?>
+<div class="sm-warnung"><?= sprintf(bw_t('TEXT.SICH_WARNUNG'), bw_e(implode(', ', $bw_altwerte))) ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
        exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
@@ -798,13 +890,13 @@ if ($bw_gw === null) { ?>
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
   <div class="sm-feld">
-    <label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= !empty($bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
+    <label<?= bw_markiert($bw_eg, 'mqtt_ein') ?>><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= bw_formhaken($bw_eg, 'mqtt_ein', $bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
       <?php echo bw_t('MQTT.L_EIN'); ?></label>
     <p class="sm-hilfe"><?php echo bw_t('MQTT.H_EIN'); ?></p>
   </div>
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_THEMA'); ?></label>
-    <input data-role="none" type="text" name="mqtt_thema" value="<?= bw_e($bw_cfg['mqtt_thema']) ?>">
+    <input data-role="none" type="text" name="mqtt_thema" value="<?= bw_e(bw_formwert($bw_eg, 'mqtt_thema', $bw_cfg['mqtt_thema'])) ?>"<?= bw_markiert($bw_eg, 'mqtt_thema') ?>>
     <p class="sm-hilfe"><?php echo bw_t('MQTT.H_THEMA'); ?></p>
   </div>
   <div class="sm-knopfreihe">
@@ -985,7 +1077,11 @@ foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
 <h2><?php echo bw_t('TEXT.H_TEST'); ?></h2>
 
 <div class="sm-kacheln">
-  <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span></div>
+  <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span><?php
+    /* b1: die gemessene Wirkung des letzten Befehls - Position danach
+       geaendert, und wann (bw_wirkung_text()). */
+    $bw_wtext = bw_wirkung_text($bw_cfg, $bw_stand);
+    if ($bw_wtext !== '') { echo '<span class="sm-wirkung">' . bw_e($bw_wtext) . '</span>'; } ?></div>
   <!-- letzte_ok wurde bis 0.9.12 an drei Stellen GESCHRIEBEN und an keiner
        gelesen. Der Unterschied zwischen "zuletzt versucht" und "zuletzt
        angenommen" ist genau das, was man beim Suchen wissen will. -->
@@ -1331,6 +1427,44 @@ if (empty($bw_cfg['mqtt_ein'])) {
                     $bw_g2['fassung'] > 0 ? (string) (int) $bw_g2['fassung'] : '?',
                     (int) $bw_g2['udpport'],
                     $bw_g2['autostart'] ? bw_t('MQTT.LAEUFT') : bw_t('MQTT.LAEUFT_NICHT')));
+    }
+}
+
+/* Die Wetterquelle (Wetter-1, ab Werk aus). Im Reiter Test ein ECHTER
+   Abruf ueber 127.0.0.1 - nur, wenn er serverseitig offen ist (wie der
+   Endpunkt oben); sonst der Stand des letzten Takts. Dieselbe Rechnung wie
+   der Takt (bw_wetter_bewerten()). Ein Strich, solange noch nie gefragt
+   wurde; ein Kreuz, wenn die Weiche keinen frischen Wert liefert - dann
+   drueckt der Takt ohne Wetterbedingung, und genau das steht dabei. */
+if (empty($bw_cfg['wetter_ein'])) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_WETTER'), 2, bw_t('TEXT.S_WETTER_AUS'));
+} else {
+    $bw_wd = bw_wetter_lesen();
+    $bw_wjetzt = time();
+    if ($bw_tab === 'tab-test') {
+        $bw_wd = bw_wetter_eintragen($bw_wd, bw_wetter_holen($bw_cfg), $bw_wjetzt);
+    }
+    if (!isset($bw_wd['abruf']) || !is_array($bw_wd['abruf'])) {
+        bw_zeile($bw_selbst, bw_t('TEXT.S_WETTER'), 2, bw_t('TEXT.S_WETTER_NIE'));
+    } else {
+        $bw_we = bw_wetter_bewerten($bw_cfg, $bw_wd, $bw_wjetzt);
+        $bw_wgrund = (string) $bw_wd['abruf']['grund'];
+        $bw_wgtext = ($bw_wgrund === '') ? ''
+            : sprintf(bw_t('TEXT.WETTER_G_' . $bw_wgrund), (int) $bw_wd['abruf']['code']);
+        $bw_wzeit = bw_zeitpunkt((int) $bw_wd['abruf']['ts']);
+        if (!empty($bw_wd['abruf']['ok'])) {
+            bw_zeile($bw_selbst, bw_t('TEXT.S_WETTER'), 1,
+                sprintf(bw_t('TEXT.S_WETTER_GUT'), $bw_wzeit, bw_wetter_zahl($bw_we['sonne']),
+                        bw_wetter_zahl($bw_we['wind']), bw_wetter_satz($bw_we)));
+        } elseif ($bw_we['lage'] === 'alt') {
+            bw_zeile($bw_selbst, bw_t('TEXT.S_WETTER'), 2,
+                sprintf(bw_t('TEXT.S_WETTER_ALT'), $bw_wzeit, $bw_wgtext, (int) $bw_we['alter'],
+                        bw_wetter_satz($bw_we)));
+        } else {
+            bw_zeile($bw_selbst, bw_t('TEXT.S_WETTER'), 0,
+                sprintf(bw_t('TEXT.S_WETTER_AUSGEFALLEN'), $bw_wzeit, $bw_wgtext,
+                        (int) round(bw_wetter_frist() / 60)));
+        }
     }
 }
 

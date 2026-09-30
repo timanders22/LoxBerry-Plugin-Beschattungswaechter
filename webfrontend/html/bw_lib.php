@@ -260,7 +260,27 @@ function bw_vorgaben()
         'mqtt_ein'     => 0,
         'mqtt_thema'   => 'beschattung',
         'pruefen_ein'  => 0,
+        /* Wetter-1 (Verbesserungsbau 30.09.2026), AB WERK AUS: die
+           Ecowitt-Weiche als Quelle fuer Sonne und Wind - siehe Abschnitt I.
+           sonne_min 120 W/m2 ist die Schwelle der WMO fuer Sonnenschein
+           (direkte Strahlung); die Station misst Globalstrahlung, es ist also
+           eine Naeherung. wind_max 0 heisst: Wind nicht pruefen. */
+        'wetter_ein'   => 0,
+        'wetter_token' => '',
+        'sonne_min'    => 120,
+        'wind_max'     => 0,
     );
+}
+
+/**
+ * Schluessel, die eine Sicherung aus einer frueheren Fassung noch nicht
+ * kennt (Wetter-1, Verbesserungsbau 30.09.2026). Fehlen sie in der Datei,
+ * gilt ihre Vorgabe (ab Werk aus), und die Meldung sagt es - jeder andere
+ * fehlende Schluessel bleibt eine Beanstandung.
+ */
+function bw_sicherung_spaeter()
+{
+    return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max');
 }
 
 /** Die Kennungen und Befehle aller eingerichteten Ziele, in ihrer Reihenfolge. */
@@ -331,6 +351,7 @@ function bw_wert_pruefen($schluessel, $wert)
         case 'aktiv':
         case 'mqtt_ein':
         case 'pruefen_ein':
+        case 'wetter_ein':
             return $s === '0' || $s === '1';
         case 'ms':
             return preg_match('/^[0-9]{1,3}$/', $s) === 1;
@@ -375,6 +396,20 @@ function bw_wert_pruefen($schluessel, $wert)
             return preg_match('/^[0-9]{1,4}$/', $s) === 1 && (int) $s >= 5 && (int) $s <= 720;
         case 'timeout':
             return preg_match('/^[0-9]{1,2}$/', $s) === 1 && (int) $s >= 2 && (int) $s <= 30;
+        case 'wetter_token':
+            /* Das Wortzeichen der Ecowitt-Weiche - dieselbe Form, die die Weiche
+               selbst zulaesst (ew_token_taugt(): [A-Za-z0-9_.-]{0,64}). Leer
+               heisst: die Weiche hat keines gesetzt. Nur eine Zeichenkette,
+               wie beim eigenen Merkwort (C6). */
+            return is_string($wert)
+                && ($s === '' || preg_match('/^[A-Za-z0-9_.\-]{1,64}\z/', $s) === 1);
+        case 'sonne_min':
+            /* W/m2, 0 = Sonne nicht pruefen. 1500 liegt ueber jeder
+               Globalstrahlung am Boden (Solarkonstante 1361 W/m2). */
+            return preg_match('/^[0-9]{1,4}$/', $s) === 1 && (int) $s <= 1500;
+        case 'wind_max':
+            /* m/s, 0 = Wind nicht pruefen. */
+            return preg_match('/^[0-9]{1,2}$/', $s) === 1 && (int) $s <= 60;
     }
     return false;
 }
@@ -1137,12 +1172,62 @@ function bw_sicherung_bauen()
                     . 'enthaelt das MERKWORT des unangemeldeten Endpunkts (aktionstoken) '
                     . 'und ist damit vertraulich - wer sie hat, kann Befehle an den '
                     . 'Miniserver ausloesen. Das Kennwort des Miniservers steht NICHT '
-                    . 'darin: es liegt in der zentralen LoxBerry-Konfiguration.',
+                    . 'darin: es liegt in der zentralen LoxBerry-Konfiguration. Ist ein '
+                    . 'Wortzeichen der Ecowitt-Weiche eingetragen (wetter_token), steht '
+                    . 'auch dieses darin.',
         '_plugin'  => 'beschattungswaechter',
         '_fassung' => bw_fassung(),
         '_stand'   => date('Y-m-d H:i:s'),
     );
+    /* X-3 (Verbesserungsbau 30.09.2026): steht in der Konfiguration ein Wert,
+       den das eigene Zurueckspielen abweisen wuerde, sagt der Kopf es - nur
+       die Namen. Geliefert wird die Sicherung trotzdem vollstaendig; fuer
+       diese Schluessel traegt sie die Vorgabe, mit der das Plugin gerade
+       arbeitet (bw_config()). */
+    $warn = bw_rueckspiel_altwerte();
+    if ($warn) {
+        $kopf['_warnung'] = 'Gespeicherte Werte, die das Zurueckspielen abweisen wuerde: '
+                          . implode(', ', $warn) . '. In dieser Sicherung steht dafuer die '
+                          . 'Vorgabe, mit der das Plugin gerade arbeitet.';
+    }
     return array_merge($kopf, bw_config());
+}
+
+/**
+ * Welche GESPEICHERTEN Werte wuerde das eigene Zurueckspielen abweisen? (X-3)
+ *
+ * Die Konfigurationsdatei wird roh gelesen - bw_config() setzt fuer einen
+ * unzulaessigen Wert still die Vorgabe ein, und dann saehe man ihn hier nie.
+ * Fehlende Schluessel kommen aus den Vorgaben (die ergaenzt bw_config() beim
+ * naechsten Lesen ohnehin). Das Ergebnis geht durch bw_sicherung_lesen() -
+ * DIESELBE Funktion wie das Zurueckspielen, keine zweite Liste. Rueckgabe:
+ * die Namen, sortiert; leer, wenn alles bestuende oder keine Datei da ist.
+ */
+function bw_rueckspiel_altwerte()
+{
+    $p = bw_paths();
+    if (!is_file($p['cfgdatei'])) {
+        return array();
+    }
+    $d = json_decode((string) @file_get_contents($p['cfgdatei']), true);
+    if (!is_array($d)) {
+        return array();
+    }
+    $probe = bw_vorgaben();
+    foreach (array_keys($probe) as $k) {
+        if (array_key_exists($k, $d)) {
+            $probe[$k] = $d[$k];
+        }
+    }
+    $js = json_encode($probe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if (!is_string($js)) {
+        return array();
+    }
+    $namen = array();
+    bw_sicherung_lesen($js, $namen);
+    $namen = array_values(array_unique($namen));
+    sort($namen);
+    return $namen;
 }
 
 /**
@@ -1179,8 +1264,11 @@ function bw_sicherung_bauen()
  * nicht, sie erklaeren es. Wer nur drei Werte abholt, bekommt weiter genau
  * das, was er bisher bekam.
  */
-function bw_sicherung_lesen($roh)
+function bw_sicherung_lesen($roh, &$namen = null)
 {
+    /* $namen (X-3): die Schluessel, deren Wert oder Name abgewiesen wurde -
+       fuer bw_rueckspiel_altwerte(). Nur Namen, nie Werte. */
+    $namen = array();
     $mangel = array();
     $hinweise = array();
     $daten = json_decode((string) $roh, true);
@@ -1197,10 +1285,16 @@ function bw_sicherung_lesen($roh)
         }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(bw_t('TEXT.SICH_FREMD'), bw_e($k));
+            $namen[] = $k;
             continue;
         }
         if (!bw_wert_pruefen($k, $w)) {
-            $mangel[] = sprintf(bw_t('TEXT.SICH_WERT'), bw_e($k), bw_e(bw_kurz($w)));
+            /* Das Wortzeichen der Weiche erscheint nie in einer Meldung, nur
+               seine Laenge (Wetter-1). */
+            $mangel[] = sprintf(bw_t('TEXT.SICH_WERT'), bw_e($k),
+                bw_e(($k === 'wetter_token' && is_string($w))
+                     ? sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($w)) : bw_kurz($w)));
+            $namen[] = $k;
             continue;
         }
         $neu[$k] = is_string($w) ? trim($w) : $w;
@@ -1241,10 +1335,21 @@ function bw_sicherung_lesen($roh)
      * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
      * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
     $fehlend = array();
+    $spaeter = array();
     foreach (array_keys(bw_vorgaben()) as $fk) {
         if (!array_key_exists($fk, $daten)) {
+            /* Ein Schluessel, den eine fruehere Fassung nicht kannte, darf
+               fehlen: dann gilt seine Vorgabe (Wetter-1 ab Werk aus). */
+            if (in_array($fk, bw_sicherung_spaeter(), true)) {
+                $spaeter[] = $fk;
+                continue;
+            }
             $fehlend[] = $fk;
         }
+    }
+    if ($spaeter) {
+        $hinweise[] = sprintf(bw_t('TEXT.SICH_SPAETER'),
+            htmlspecialchars(implode(', ', $spaeter), ENT_QUOTES, 'UTF-8'));
     }
     if ($fehlend) {
         $mangel[] = sprintf(bw_t('TEXT.SICH_FEHLEND'), count($fehlend),
@@ -2707,11 +2812,21 @@ function bw_endpunkt_pfad(array $werte, $roh = false)
 /** Die Strukturdatei holen. Rueckgabe: array(ok, Meldung, controls). */
 function bw_struktur_holen(array $c)
 {
+    /* EINMAL JE PROZESS (b1, Verbesserungsbau 30.09.2026): der Takt liest vor
+       einem Befehl die Positionen und zaehlt danach die Automatiken - beides
+       aus derselben Strukturdatei. Gemerkt wird nur ein Erfolg, je Adresse
+       und Benutzer; jede Anfrage an Oberflaeche oder Endpunkt ist ein eigener
+       Prozess und holt neu. */
+    static $bw_merk = array();
     $m = bw_miniserver_gewaehlt($c);
     if ($m === null) {
         return array(0, bw_t('TEXT.KEIN_MS'), array());
     }
     $url = 'http://' . $m['adresse'] . ':' . $m['port'] . '/data/LoxAPP3.json';
+    $bw_mk = $url . '|' . $m['user'];
+    if (isset($bw_merk[$bw_mk])) {
+        return $bw_merk[$bw_mk];
+    }
     $kopf = array('Accept: application/json');
     if ($m['user'] !== '') {
         /* Die Zugangsdaten gehen in den KOPF, nicht in die Adresse: eine
@@ -2733,7 +2848,8 @@ function bw_struktur_holen(array $c)
     if (!is_array($d) || !isset($d['controls']) || !is_array($d['controls'])) {
         return array(0, bw_t('TEXT.STRUKTUR_FORM'), array());
     }
-    return array(1, '', $d);
+    $bw_merk[$bw_mk] = array(1, '', $d);
+    return $bw_merk[$bw_mk];
 }
 
 /**
@@ -2826,6 +2942,248 @@ function bw_zustand_lesen(array $m, array $kopf, $uuid, $frist)
         return (string) $d['LL']['value'];
     }
     return null;
+}
+
+
+/* ==================================================================
+ * E2. DIE WIRKUNG AN DER POSITION (b1, Verbesserungsbau 30.09.2026)
+ * ==================================================================
+ *
+ * Die Kachel "zuletzt gesendet" sagte bis 0.9.23 nur, WANN gesendet wurde.
+ * Ob danach ein Rollladen gefahren ist, stand nirgends - die Zaehlung liest
+ * autoActive, und das sagt "die Automatik darf", nicht "es hat sich etwas
+ * bewegt".
+ *
+ * Gemessen wird der Zustand 'position' jeder Jalousie, belegt in der
+ * Strukturdatei der Anlage (Geraet/2026-09-08/LoxAPP3.json: 25 Jalousien,
+ * jede fuehrt position, shadePosition, autoActive, autoAllowed ...). Vor dem
+ * Befehl einmal, danach im Takt alle fuenf Minuten, bis sich eine Position um
+ * mindestens 0,01 geaendert hat oder bw_wirkung_frist() vorbei ist.
+ *
+ * NUR MIT EINGESCHALTETER WIRKUNGSMESSUNG (pruefen_ein, ab Werk aus) - sie ist
+ * die Zustimmung, Zustaende beim Miniserver abzufragen. Hoechstens 40
+ * Jalousien wie bei der Zaehlung; der erste Zustand, der sich nicht lesen
+ * laesst, beendet die Runde (ein toter Miniserver kostet sonst 40 Fristen in
+ * einem Fuenfminutentakt).
+ *
+ * WAS "FESTGESTELLT" HEISST: der Zeitpunkt der Nachmessung, die die Aenderung
+ * zuerst sah - Raster fuenf Minuten, nicht der Augenblick der Bewegung. Und
+ * "danach geaendert" heisst nicht "vom Befehl bewegt": auch eine Hand am
+ * Taster aendert die Position. Die Kachel sagt es so.
+ * ================================================================== */
+
+/** Wie lange nach einem Befehl nachgemessen wird (Sekunden). */
+function bw_wirkung_frist()
+{
+    return 1800;
+}
+
+/**
+ * Die Positionen der Jalousien lesen.
+ *
+ * $stellen null: alle Jalousien mit dem Zustand position aus der
+ * Strukturdatei (hoechstens 40); sonst genau diese Zustandskennungen.
+ * Rueckgabe: ok, grund (Kennwort fuer die Kachel), detail (Klartext),
+ * werte (Kennung => Position), namen (Kennung => Bausteinname).
+ */
+function bw_positionen(array $c, ?array $stellen = null)
+{
+    $aus = array('ok' => false, 'grund' => '', 'detail' => '', 'werte' => array(), 'namen' => array());
+    if ($stellen === null) {
+        list($ok, $meldung, $d) = bw_struktur_holen($c);
+        if (!$ok) {
+            $aus['grund'] = 'STRUKTUR';
+            $aus['detail'] = html_entity_decode(strip_tags((string) $meldung), ENT_QUOTES, 'UTF-8');
+            return $aus;
+        }
+        $stellen = array();
+        foreach ($d['controls'] as $uuid => $b) {
+            if (!is_array($b) || (string) (isset($b['type']) ? $b['type'] : '') !== 'Jalousie') {
+                continue;
+            }
+            $z = (isset($b['states']) && is_array($b['states'])) ? $b['states'] : array();
+            if (!isset($z['position']) || !is_scalar($z['position']) || trim((string) $z['position']) === '') {
+                continue;
+            }
+            if (count($stellen) >= 40) {
+                break;
+            }
+            $k = trim((string) $z['position']);
+            $stellen[] = $k;
+            $aus['namen'][$k] = (isset($b['name']) && is_scalar($b['name'])) ? (string) $b['name'] : (string) $uuid;
+        }
+        if (!$stellen) {
+            $aus['grund'] = 'KEINE_JALOUSIE';
+            return $aus;
+        }
+    }
+    $m = bw_miniserver_gewaehlt($c);
+    if ($m === null) {
+        $aus['grund'] = 'KEIN_MS';
+        return $aus;
+    }
+    $kopf = array('Accept: application/json');
+    if ($m['user'] !== '') {
+        $kopf[] = 'Authorization: Basic ' . base64_encode($m['user'] . ':' . $m['pass']);
+    }
+    foreach ($stellen as $k) {
+        $k = (string) $k;
+        $v = bw_zustand_lesen($m, $kopf, $k, (int) $c['timeout']);
+        if ($v === null || !is_numeric($v)) {
+            $aus['grund'] = 'ZUSTAND';
+            $aus['werte'] = array();
+            return $aus;
+        }
+        $aus['werte'][$k] = round((float) $v, 4);
+    }
+    $aus['ok'] = true;
+    return $aus;
+}
+
+/** Die Positionen VOR einem Befehl - null, wenn die Messung aus ist oder nur geprobt wird. */
+function bw_wirkung_vorher(array $c)
+{
+    if (empty($c['pruefen_ein']) || bw_trocken()) {
+        return null;
+    }
+    return bw_positionen($c);
+}
+
+/**
+ * Nach einem Befehl die Wirkung eroeffnen - im Stand, den bw_stand_nach_senden()
+ * gerade gebildet hat. $vorher null (Messung aus): ein alter Eintrag faellt
+ * weg, die Kachel sagt "nicht gemessen".
+ */
+function bw_wirkung_beginnen(array $stand, $vorher, array $ergebnisse)
+{
+    if (!is_array($vorher)) {
+        unset($stand['wirkung']);
+        return $stand;
+    }
+    $gut = 0;
+    foreach ($ergebnisse as $r) {
+        if (!empty($r['ok']) && empty($r['probe'])) { $gut++; }
+    }
+    $w = array('ts' => isset($stand['letzte']) ? (int) $stand['letzte'] : time(), 'lage' => 'offen',
+               'n' => 0, 'vorher' => array(), 'namen' => array(), 'geaendert' => 0, 'welche' => array(),
+               'erste' => 0, 'gemessen' => 0, 'fehlschlag' => 0, 'grund' => '', 'detail' => '');
+    if ($gut === 0) {
+        $w['lage'] = 'nicht_messbar';
+        $w['grund'] = 'NICHT_ANGENOMMEN';
+    } elseif (empty($vorher['ok'])) {
+        $w['lage'] = 'nicht_messbar';
+        $w['grund'] = (string) $vorher['grund'];
+        $w['detail'] = (string) $vorher['detail'];
+    } else {
+        $w['vorher'] = $vorher['werte'];
+        $w['namen'] = $vorher['namen'];
+        $w['n'] = count($vorher['werte']);
+    }
+    $stand['wirkung'] = $w;
+    return $stand;
+}
+
+/** Steht eine Nachmessung aus? */
+function bw_wirkung_offen(array $c, array $stand)
+{
+    return !empty($c['pruefen_ein']) && isset($stand['wirkung']) && is_array($stand['wirkung'])
+        && isset($stand['wirkung']['lage']) && $stand['wirkung']['lage'] === 'offen';
+}
+
+/**
+ * Im Takt nachmessen. Ein Fehlschlag laesst die Messung offen (bis zur Frist);
+ * die erste Aenderung schliesst sie. Nach der Frist (mit einem halben Takt
+ * Toleranz wie beim Abstand) ist sie "unveraendert".
+ */
+function bw_wirkung_nachmessen(array $c, array $stand, $jetzt = null)
+{
+    if (!bw_wirkung_offen($c, $stand)) {
+        return $stand;
+    }
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $w = $stand['wirkung'];
+    $vorher = (isset($w['vorher']) && is_array($w['vorher'])) ? $w['vorher'] : array();
+    $seit = $jetzt - (int) $w['ts'];
+    if (!$vorher) {
+        $w['lage'] = 'nicht_messbar';
+        $w['grund'] = 'KEINE_JALOUSIE';
+    } elseif ($seit > bw_wirkung_frist() + 150) {
+        $w['lage'] = 'unveraendert';
+    } else {
+        $erg = bw_positionen($c, array_keys($vorher));
+        if (!$erg['ok']) {
+            $w['fehlschlag'] = $jetzt;
+            $w['grund'] = (string) $erg['grund'];
+            $w['detail'] = (string) $erg['detail'];
+        } else {
+            $w['gemessen'] = $jetzt;
+            $w['fehlschlag'] = 0;
+            $w['grund'] = '';
+            $w['detail'] = '';
+            $welche = array();
+            foreach ($vorher as $k => $v) {
+                if (isset($erg['werte'][$k]) && abs((float) $erg['werte'][$k] - (float) $v) >= 0.01) {
+                    $welche[] = isset($w['namen'][$k]) ? (string) $w['namen'][$k] : (string) $k;
+                }
+            }
+            if ($welche) {
+                $w['lage'] = 'geaendert';
+                $w['erste'] = $jetzt;
+                $w['geaendert'] = count($welche);
+                $w['welche'] = array_slice($welche, 0, 5);
+            } elseif ($seit >= bw_wirkung_frist()) {
+                $w['lage'] = 'unveraendert';
+            }
+        }
+    }
+    if ($w['lage'] !== 'offen') {
+        /* Abgeschlossen: die Einzelwerte werden nicht mehr gebraucht. */
+        $w['vorher'] = array();
+        $w['namen'] = array();
+    }
+    $stand['wirkung'] = $w;
+    return $stand;
+}
+
+/** Der Satz fuer die Kachel "zuletzt gesendet" - Klartext, maskiert wird bei der Ausgabe. */
+function bw_wirkung_text(array $c, array $stand)
+{
+    $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
+    if ($letzte <= 0) {
+        return '';
+    }
+    $w = (isset($stand['wirkung']) && is_array($stand['wirkung'])) ? $stand['wirkung'] : null;
+    if ($w === null || (int) (isset($w['ts']) ? $w['ts'] : 0) !== $letzte) {
+        return bw_t(empty($c['pruefen_ein']) ? 'TEXT.WIRKUNG_AUS' : 'TEXT.WIRKUNG_KEINE');
+    }
+    $lage = isset($w['lage']) ? (string) $w['lage'] : '';
+    $grund = function () use ($w) {
+        $g = isset($w['grund']) ? (string) $w['grund'] : '';
+        $t = bw_t('TEXT.WIRKUNG_G_' . ($g !== '' ? $g : 'ZUSTAND'));
+        return ($g === 'STRUKTUR') ? sprintf($t, isset($w['detail']) ? (string) $w['detail'] : '') : $t;
+    };
+    if ($lage === 'nicht_messbar') {
+        return sprintf(bw_t('TEXT.WIRKUNG_NICHT_MESSBAR'), $grund());
+    }
+    if ($lage === 'geaendert') {
+        return sprintf(bw_t('TEXT.WIRKUNG_GEAENDERT'), (int) $w['geaendert'], (int) $w['n'],
+                       bw_zeitpunkt((int) $w['erste']), (int) round(((int) $w['erste'] - $letzte) / 60),
+                       implode(', ', (array) $w['welche']) . ((int) $w['geaendert'] > 5 ? ', ...' : ''));
+    }
+    if ($lage === 'unveraendert') {
+        return sprintf(bw_t('TEXT.WIRKUNG_UNVERAENDERT'), (int) round(bw_wirkung_frist() / 60), (int) $w['n']);
+    }
+    if (empty($c['pruefen_ein'])) {
+        return bw_t('TEXT.WIRKUNG_AUS');
+    }
+    $bis = bw_zeitpunkt($letzte + bw_wirkung_frist());
+    if (!empty($w['fehlschlag']) && (int) $w['fehlschlag'] >= (int) $w['gemessen']) {
+        return sprintf(bw_t('TEXT.WIRKUNG_FEHLSCHLAG'), bw_zeitpunkt((int) $w['fehlschlag']), $grund(), $bis);
+    }
+    if (!empty($w['gemessen'])) {
+        return sprintf(bw_t('TEXT.WIRKUNG_BISHER'), (int) $w['n'], bw_zeitpunkt((int) $w['gemessen']), $bis);
+    }
+    return sprintf(bw_t('TEXT.WIRKUNG_OFFEN'), (int) $w['n'], $bis);
 }
 
 /**
@@ -3354,7 +3712,134 @@ function bw_einmal_lesen()
         $aus['zaehlung'] = $d['zaehlung'];
     }
     $aus['tab'] = (isset($d['tab']) && is_string($d['tab'])) ? $d['tab'] : '';
+    /* X-2: die eingetippten Werte nach einer Beanstandung - nur, was
+       bw_eingaben_pruefen() durchlaesst. */
+    $aus['eingaben'] = isset($d['eingaben']) ? bw_eingaben_pruefen($d['eingaben']) : null;
     return $aus;
+}
+
+/* ==================================================================
+ * Eingaben nach einer Beanstandung (Verbesserungsbau 30.09.2026, X-2 und
+ * Entscheidung 16; Regeln/04 "Nach einer Beanstandung stehen die
+ * eingetippten Werte wieder im Formular")
+ *
+ * Nur nach einer Beanstandung, nur das eine Formular und nur seine Felder.
+ * Gespeichert wurde dann nichts. Nie Geheimnisse: das Wortzeichen der
+ * Ecowitt-Weiche steht unter 'geheim' - es wird markiert, reist aber nie mit.
+ * ================================================================== */
+
+/** Die Felder je Formular: text, haken, geheim - null fuer ein unbekanntes. */
+function bw_eingabe_felder($form)
+{
+    $ziele = array();
+    for ($i = 2; $i <= 6; $i++) {
+        $ziele[] = 'uuid' . $i;
+        $ziele[] = 'befehl' . $i;
+    }
+    $felder = array(
+        'settings' => array(
+            'text'   => array_merge(array('ms_nr', 'uuid', 'befehl'), $ziele,
+                                    array('von', 'bis', 'abstand', 'sonne_min', 'wind_max')),
+            'haken'  => array('aktiv', 'pruefen_ein', 'wetter_ein'),
+            'geheim' => array('wetter_token'),
+        ),
+        'mqtt' => array(
+            'text'   => array('mqtt_thema'),
+            'haken'  => array('mqtt_ein'),
+            'geheim' => array(),
+        ),
+    );
+    return isset($felder[$form]) ? $felder[$form] : null;
+}
+
+/** Taugt ein eingetippter Wert zum Mitreisen? Zeichenkette, gueltiges UTF-8, hoechstens 256 Byte. */
+function bw_eingabe_reist($v)
+{
+    return is_string($v) && strlen($v) <= 256 && preg_match('//u', $v) === 1;
+}
+
+/** Die eingetippten Werte eines beanstandeten Formulars sammeln. */
+function bw_eingaben_sammeln($form, array $post, array $markiert)
+{
+    $f = bw_eingabe_felder($form);
+    if ($f === null) {
+        return null;
+    }
+    $werte = array();
+    foreach ($f['text'] as $k) {
+        $v = (isset($post[$k]) && is_string($post[$k])) ? $post[$k] : '';
+        if (bw_eingabe_reist($v)) {
+            $werte[$k] = $v;
+        }
+    }
+    foreach ($f['haken'] as $k) {
+        $werte[$k] = empty($post[$k]) ? '0' : '1';
+    }
+    $alle = array_merge($f['text'], $f['haken'], $f['geheim']);
+    $mark = array();
+    foreach ($markiert as $k) {
+        if (is_string($k) && in_array($k, $alle, true) && !in_array($k, $mark, true)) {
+            $mark[] = $k;
+        }
+    }
+    return array('form' => $form, 'werte' => $werte, 'markiert' => $mark);
+}
+
+/** Die Eingaben aus der Einmalmeldung pruefen - was nicht passt, faellt weg. */
+function bw_eingaben_pruefen($roh)
+{
+    if (!is_array($roh) || !isset($roh['form']) || !is_string($roh['form'])) {
+        return null;
+    }
+    $f = bw_eingabe_felder($roh['form']);
+    if ($f === null) {
+        return null;
+    }
+    $werte = array();
+    if (isset($roh['werte']) && is_array($roh['werte'])) {
+        foreach ($roh['werte'] as $k => $v) {
+            /* Ein Geheimnis wird auch hier nicht angenommen. */
+            if (is_string($k) && in_array($k, array_merge($f['text'], $f['haken']), true)
+                    && bw_eingabe_reist($v)) {
+                $werte[$k] = $v;
+            }
+        }
+    }
+    $alle = array_merge($f['text'], $f['haken'], $f['geheim']);
+    $mark = array();
+    if (isset($roh['markiert']) && is_array($roh['markiert'])) {
+        foreach ($roh['markiert'] as $k) {
+            if (is_string($k) && in_array($k, $alle, true) && !in_array($k, $mark, true)) {
+                $mark[] = $k;
+            }
+        }
+    }
+    return array('form' => $roh['form'], 'werte' => $werte, 'markiert' => $mark);
+}
+
+/** Der Wert eines Feldes: nach einer Beanstandung der eingetippte, sonst der gespeicherte. */
+function bw_formwert($eg, $name, $gespeichert)
+{
+    if (is_array($eg) && isset($eg['werte'][$name]) && is_string($eg['werte'][$name])) {
+        return $eg['werte'][$name];
+    }
+    return (string) $gespeichert;
+}
+
+/** Ein Haken: nach einer Beanstandung der eingetippte Zustand, sonst der gespeicherte. */
+function bw_formhaken($eg, $name, $gespeichert)
+{
+    if (is_array($eg) && isset($eg['werte'][$name])) {
+        return $eg['werte'][$name] === '1';
+    }
+    return !empty($gespeichert);
+}
+
+/** Das Attribut fuer ein beanstandetes Feld - rot umrandet - oder nichts. */
+function bw_markiert($eg, $name)
+{
+    return (is_array($eg) && isset($eg['markiert']) && in_array($name, $eg['markiert'], true))
+        ? ' class="sm-beanstandet"' : '';
 }
 
 /**
@@ -3482,4 +3967,264 @@ function bw_log_ende($f, $n = 20)
         if (trim($z) !== '') { $zeilen[] = $z; }
     }
     return array_slice($zeilen, -$n);
+}
+
+
+/* ==================================================================
+ * I. WETTER AUS DER ECOWITT-WEICHE (Wetter-1, Verbesserungsbau 30.09.2026)
+ * ==================================================================
+ *
+ * AB WERK AUS (wetter_ein). Eingeschaltet haelt der TAKT einen faelligen
+ * Befehl zurueck, solange die Sonne unter sonne_min liegt oder Wind bzw. Boe
+ * ueber wind_max. "A druecken" ohne Sonne holt nur Automatiken zurueck, die
+ * jemand bewusst abgeschaltet hat - und bewirkt sonst nichts.
+ *
+ * DIE QUELLE: der HTTP-Endpunkt der Ecowitt-Weiche, nie ihre Dateien.
+ * Belegt in LoxBerry-Plugin-Ecowitt-Weiche-0.9.16: live.php reicht das JSON
+ * der Station wortgetreu durch (common_list mit id/val), Ordner ecowittweiche
+ * (plugin.cfg), Wortzeichen ?token= (nur, wenn dort eines gesetzt ist), HTTP
+ * 503 ohne Daten, wenn beide Seiten ausfallen, Port des Webservers aus
+ * general.json Webserver.Port. MQTT sendet die Weiche nicht.
+ * Kennungen: 0x15 Solarstrahlung (in der Weiche benannt), 0x0B
+ * Windgeschwindigkeit und 0x0C Boe (Eingaenge der Anlage, Projektdatei
+ * 20260911_0753). Die Station schreibt die Einheit in val ("673.64 W/m2",
+ * "1.2 m/s") oder in unit; eine fremde Einheit (Lux, Beaufort) heisst "ohne
+ * Aussage".
+ *
+ * FAELLT DIE WEICHE AUS - kein guter Abruf innerhalb von bw_wetter_frist() -,
+ * gilt das bisherige Verhalten: der Befehl geht ohne Wetterbedingung hinaus.
+ * Eine Protokollzeile je Stunde, und der Reiter Test sagt es. Ein Wert ohne
+ * Aussage haelt ebenfalls nichts zurueck.
+ *
+ * "jetzt" (Endpunkt, Knopf, --jetzt) fragt kein Wetter - wer den Befehl
+ * schickt, meint ihn, wie bei Zeitfenster und Abstand.
+ * ================================================================== */
+
+/** Wie alt ein guter Wetterwert hoechstens sein darf (Sekunden). */
+function bw_wetter_frist()
+{
+    return 600;
+}
+
+/** Der Pfad des Endpunkts der Weiche - ohne Wortzeichen, auch fuer Anzeige und Protokoll. */
+function bw_wetter_pfad()
+{
+    return '/plugins/ecowittweiche/live.php';
+}
+
+/** Der Port des LoxBerry-Webservers (general.json Webserver.Port), sonst 80 - wie ew_webport(). */
+function bw_webport()
+{
+    $p = bw_paths();
+    $g = $p['lbhome'] !== '' ? $p['lbhome'] . '/config/system/general.json' : '';
+    if ($g !== '' && is_file($g)) {
+        $d = json_decode((string) @file_get_contents($g), true);
+        $port = (is_array($d) && isset($d['Webserver']['Port']) && is_scalar($d['Webserver']['Port']))
+            ? (int) $d['Webserver']['Port'] : 0;
+        if ($port > 0 && $port <= 65535) {
+            return $port;
+        }
+    }
+    return 80;
+}
+
+/** Zahl und Einheit eines Eintrags aus common_list - array(null, '') ohne Aussage. */
+function bw_wetter_eintrag(array $liste, $id)
+{
+    foreach ($liste as $e) {
+        if (!is_array($e) || !isset($e['id']) || $e['id'] !== $id) {
+            continue;
+        }
+        $v = (isset($e['val']) && is_scalar($e['val'])) ? trim((string) $e['val']) : '';
+        /* "--" und "---.-" sind die Platzhalter der Station bei verlorenem
+           Funk (Ecowitt-Weiche, README) - sie beginnen nicht mit einer Ziffer. */
+        if (!preg_match('/^(-?[0-9]+(?:\.[0-9]+)?)\s*(.*)$/', $v, $m)) {
+            return array(null, '');
+        }
+        $einheit = trim($m[2]);
+        if ($einheit === '' && isset($e['unit']) && is_scalar($e['unit'])) {
+            $einheit = trim((string) $e['unit']);
+        }
+        return array((float) $m[1], $einheit);
+    }
+    return array(null, '');
+}
+
+/** Solarstrahlung (0x15) in W/m2; null ohne Aussage oder in einer anderen Einheit. */
+function bw_wetter_sonne(array $liste)
+{
+    list($z, $e) = bw_wetter_eintrag($liste, '0x15');
+    if ($z === null) {
+        return null;
+    }
+    $e = strtolower(str_replace(array(' ', "\xc2\xb2"), array('', '2'), $e));
+    return ($e === '' || $e === 'w/m2') ? round($z, 1) : null;
+}
+
+/** Wind in m/s: der groessere Wert aus Windgeschwindigkeit (0x0B) und Boe (0x0C). */
+function bw_wetter_wind(array $liste)
+{
+    $faktor = array('' => 1.0, 'm/s' => 1.0, 'km/h' => 1 / 3.6, 'kmh' => 1 / 3.6, 'mph' => 0.44704,
+                    'knots' => 0.514444, 'knot' => 0.514444, 'kn' => 0.514444, 'kt' => 0.514444,
+                    'ft/s' => 0.3048);
+    $best = null;
+    foreach (array('0x0B', '0x0C') as $id) {
+        list($z, $e) = bw_wetter_eintrag($liste, $id);
+        $e = strtolower(str_replace(' ', '', $e));
+        if ($z === null || !isset($faktor[$e])) {
+            continue;
+        }
+        $ms = $z * $faktor[$e];
+        if ($best === null || $ms > $best) {
+            $best = $ms;
+        }
+    }
+    return $best === null ? null : round($best, 1);
+}
+
+/**
+ * Die Weiche fragen - ueber 127.0.0.1 und den Port des LoxBerry-Webservers.
+ * Rueckgabe: ok, grund (Kennwort), code (HTTP), sonne, wind, quelle.
+ * Die Adresse mit dem Wortzeichen verlaesst diese Funktion nie.
+ */
+function bw_wetter_holen(array $c)
+{
+    $aus = array('ok' => false, 'grund' => '', 'code' => 0, 'sonne' => null, 'wind' => null, 'quelle' => '');
+    $tok = isset($c['wetter_token']) ? trim((string) $c['wetter_token']) : '';
+    $url = 'http://127.0.0.1:' . bw_webport() . bw_wetter_pfad()
+         . ($tok !== '' ? '?token=' . rawurlencode($tok) : '');
+    list($code, $roh) = bw_holen($url, array('Accept: application/json'), 4);
+    $aus['code'] = (int) $code;
+    if ($code === 0) {
+        $aus['grund'] = 'STUMM';
+    } elseif ($code === 403) {
+        $aus['grund'] = 'TOKEN';
+    } elseif ($code === 404) {
+        $aus['grund'] = 'FEHLT';
+    } elseif ($code === 503) {
+        $aus['grund'] = 'AUSFALL';
+    } elseif ($code !== 200) {
+        $aus['grund'] = 'HTTP';
+    }
+    if ($aus['grund'] !== '') {
+        return $aus;
+    }
+    $d = json_decode((string) $roh, true);
+    if (!is_array($d) || !isset($d['common_list']) || !is_array($d['common_list'])) {
+        $aus['grund'] = 'FORM';
+        return $aus;
+    }
+    $aus['ok'] = true;
+    $aus['sonne'] = bw_wetter_sonne($d['common_list']);
+    $aus['wind'] = bw_wetter_wind($d['common_list']);
+    $aus['quelle'] = (isset($d['ew_quelle']) && is_string($d['ew_quelle']))
+        ? substr(preg_replace('/[^a-z]/', '', $d['ew_quelle']), 0, 12) : '';
+    return $aus;
+}
+
+/** Der gemerkte Stand (data/wetter.json): abruf, gut, entscheidung. Traegt kein Wortzeichen. */
+function bw_wetter_lesen()
+{
+    $d = json_decode((string) @file_get_contents(bw_paths()['datadir'] . '/wetter.json'), true);
+    return is_array($d) ? $d : array();
+}
+
+/** Einen Abruf in den gemerkten Stand eintragen. */
+function bw_wetter_eintragen(array $d, array $abruf, $jetzt)
+{
+    $d['abruf'] = array('ts' => (int) $jetzt, 'ok' => $abruf['ok'] ? 1 : 0,
+                        'grund' => (string) $abruf['grund'], 'code' => (int) $abruf['code']);
+    if ($abruf['ok']) {
+        $d['gut'] = array('ts' => (int) $jetzt, 'sonne' => $abruf['sonne'], 'wind' => $abruf['wind'],
+                          'quelle' => (string) $abruf['quelle']);
+    }
+    return $d;
+}
+
+/**
+ * Aus dem gemerkten Stand entscheiden - EINE Rechnung fuer Takt und Reiter
+ * Test. lage: frisch (letzter Abruf gut), alt (letzter Abruf gescheitert, der
+ * gute ist hoechstens bw_wetter_frist() alt), ausgefallen (bisheriges
+ * Verhalten). sperrt: '', 'sonne' oder 'wind'.
+ */
+function bw_wetter_bewerten(array $c, array $d, $jetzt)
+{
+    $gut = (isset($d['gut']) && is_array($d['gut'])) ? $d['gut'] : null;
+    $alter = $gut !== null ? max(0, (int) $jetzt - (int) (isset($gut['ts']) ? $gut['ts'] : 0)) : -1;
+    $e = array('lage' => 'ausgefallen', 'sperrt' => '', 'sonne' => null, 'wind' => null, 'alter' => $alter,
+               'smin' => (int) $c['sonne_min'], 'wmax' => (int) $c['wind_max']);
+    if ($gut === null || $alter > bw_wetter_frist()) {
+        return $e;
+    }
+    $e['lage'] = (!empty($d['abruf']['ok'])) ? 'frisch' : 'alt';
+    $e['sonne'] = (isset($gut['sonne']) && is_numeric($gut['sonne'])) ? (float) $gut['sonne'] : null;
+    $e['wind'] = (isset($gut['wind']) && is_numeric($gut['wind'])) ? (float) $gut['wind'] : null;
+    if ($e['wmax'] > 0 && $e['wind'] !== null && $e['wind'] > $e['wmax']) {
+        $e['sperrt'] = 'wind';
+    } elseif ($e['smin'] > 0 && $e['sonne'] !== null && $e['sonne'] < $e['smin']) {
+        $e['sperrt'] = 'sonne';
+    }
+    return $e;
+}
+
+/** Eine Zahl ohne Gebietsschema (Punkt), eine Nachkommastelle. */
+function bw_wetter_zahl($z)
+{
+    return $z === null ? '-' : number_format((float) $z, 1, '.', '');
+}
+
+/** Die Entscheidung als deutscher Satz fuer Protokoll und Ausgabe des Laufs. */
+function bw_wetter_protokollsatz(array $e)
+{
+    if ($e['lage'] === 'ausgefallen') {
+        return 'keine frischen Wetterdaten der Ecowitt-Weiche - bisheriges Verhalten, ohne Wetterbedingung';
+    }
+    $werte = 'Sonne ' . bw_wetter_zahl($e['sonne']) . ' W/m2, Wind ' . bw_wetter_zahl($e['wind']) . ' m/s';
+    if ($e['sperrt'] === 'wind') {
+        return 'Wind ueber ' . $e['wmax'] . ' m/s (' . $werte . ') - Befehl zurueckgehalten';
+    }
+    if ($e['sperrt'] === 'sonne') {
+        return 'Sonne unter ' . $e['smin'] . ' W/m2 (' . $werte . ') - Befehl zurueckgehalten';
+    }
+    return 'Wetter erlaubt den Befehl (' . $werte . ')';
+}
+
+/** Die Entscheidung als Satz fuer die Oberflaeche (uebersetzt, Klartext). */
+function bw_wetter_satz(array $e)
+{
+    if ($e['lage'] === 'ausgefallen') {
+        return bw_t('TEXT.WETTER_BISHERIG');
+    }
+    if ($e['sperrt'] === 'wind') {
+        return sprintf(bw_t('TEXT.WETTER_WIND'), bw_wetter_zahl($e['wind']), $e['wmax']);
+    }
+    if ($e['sperrt'] === 'sonne') {
+        return sprintf(bw_t('TEXT.WETTER_SONNE'), bw_wetter_zahl($e['sonne']), $e['smin']);
+    }
+    return bw_t('TEXT.WETTER_ERLAUBT');
+}
+
+/**
+ * Die Wetterbedingung des Takts: die Weiche fragen, den Abruf merken,
+ * entscheiden. $schreiben = false (Probe): nichts ablegen, nichts
+ * protokollieren.
+ */
+function bw_wetter_entscheiden(array $c, $schreiben = true, $jetzt = null)
+{
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $abruf = bw_wetter_holen($c);
+    $d = bw_wetter_eintragen(bw_wetter_lesen(), $abruf, $jetzt);
+    $e = bw_wetter_bewerten($c, $d, $jetzt);
+    $e['abruf'] = $abruf;
+    $d['entscheidung'] = array('ts' => $jetzt, 'lage' => $e['lage'], 'sperrt' => $e['sperrt']);
+    if ($schreiben) {
+        bw_json_schreiben(bw_paths()['datadir'] . '/wetter.json', $d, 0644);
+        if ($e['lage'] === 'ausgefallen') {
+            bw_log_wenn_neu('wetter_aus',
+                'Wetter: die Ecowitt-Weiche lieferte seit mehr als ' . (int) round(bw_wetter_frist() / 60)
+                . ' Minuten keinen brauchbaren Wert (zuletzt ' . $abruf['grund'] . ', HTTP ' . (int) $abruf['code']
+                . ') - es gilt das bisherige Verhalten: der Befehl geht ohne Wetterbedingung hinaus.');
+        }
+    }
+    return $e;
 }

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.22
+Version 0.9.23
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -13,9 +13,34 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * **Rückweg nach Loxone:** ein Endpunkt im unangemeldeten Bereich, den der
   Miniserver ohne Zugangsdaten abfragen kann, geschützt durch ein Merkwort.
 * Wahlweise zusätzlich über **MQTT**, mit Lebenszeichen bei jedem Durchgang.
-* Misst auf Wunsch die **Wirkung** (`autoActive`) statt nur des Rückgabewerts.
+* Misst auf Wunsch die **Wirkung** (`autoActive` und die Position danach) statt
+  nur des Rückgabewerts.
 * Meldet sich beim **Healthcheck** von LoxBerry.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
+  Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
+  **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.23
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen an Attrappen
+für Miniserver und Ecowitt-Weiche unter PHP 7.4, 8.3 und 8.5; nicht am Gerät.
+
+* **„Zählen“ nimmt dieselbe Sperre wie der Takt.** Läuft gerade ein Takt, wird
+  nicht gezählt, und die Seite sagt es; bis 0.9.22 konnten sich beide in die
+  Quere kommen.
+* **Die Kachel „zuletzt gesendet“ zeigt die Wirkung** – bei eingeschalteter
+  Wirkungsmessung: ob und wann sich die Position der Rollläden danach geändert
+  hat (bis 30 min nach dem Befehl).
+* **Neu, ab Werk aus: Wetter aus der Ecowitt-Weiche.** Ein fälliger Befehl wird
+  zurückgehalten, wenn die Sonne unter der Schwelle (Vorgabe 120 W/m²) liegt oder
+  Wind bzw. Böe über `wind_max` (Vorgabe 0 = nicht prüfen). Kommt 10 min lang
+  kein brauchbarer Wert, gilt das bisherige Verhalten; der Reiter Test und
+  höchstens stündlich das Protokoll sagen es. Gilt nur im Takt, nicht für „jetzt“.
+* **Nach einer Beanstandung wird nichts gespeichert** – auch die übrigen Felder
+  nicht. Die eingetippten Werte stehen wieder im Formular, das Feld ist markiert.
+* „Einstellungen sichern“ warnt, wenn die Sicherung beim Zurückspielen abgewiesen
+  würde (`_warnung` mit den Namen). Sicherungen aus 0.9.22 bleiben zurückspielbar.
 
 ## Neu in 0.9.22
 
@@ -138,6 +163,22 @@ diesem Endpunkt weiter.**
 Das Kennwort des **Miniservers** steht nicht darin. Es liegt in der zentralen
 LoxBerry-Konfiguration, und dieses Plugin liest es dort, zeigt es nicht an und
 schreibt es nirgends hin.
+
+Steht in der gespeicherten Konfiguration ein Wert, den das Zurückspielen
+abweisen würde (etwa von Hand eingetragen), warnt der Reiter *Einstellungen*
+gelb am Knopf, und die Sicherung trägt den Kopf `_warnung` mit den Namen – nie
+den Werten. Geliefert wird sie trotzdem, für diese Einstellung mit der Vorgabe,
+mit der das Plugin gerade arbeitet.
+
+Eine Sicherung aus einer Fassung ohne die Wetter-Einstellungen wird angenommen;
+für `wetter_ein`, `wetter_token`, `sonne_min` und `wind_max` gilt dann die
+Vorgabe (Wetter aus), und die Meldung sagt es. Jeder andere fehlende Schlüssel
+bleibt eine Beanstandung.
+
+**Beim Speichern im Reiter *Einstellungen* oder *MQTT*** gilt: wird ein Feld
+beanstandet, wird **nichts** gespeichert, auch nicht die übrigen Felder. Die eingetippten Werte stehen danach wieder im Formular, das
+beanstandete Feld ist rot umrandet; ein zweites Neuladen zeigt die
+gespeicherten Werte. Das Wortzeichen der Ecowitt-Weiche reist dabei nicht mit.
 
 Beim Zurückspielen gilt: eine halb gültige Datei ändert **gar nichts**.
 Unbekannte Schlüssel und unzulässige Werte werden benannt, alle auf einmal, und
@@ -264,6 +305,55 @@ diesen Zustand **nicht** und wird deshalb nicht mitgezählt.
 Die Messung ist ab Werk **aus**: sie fragt je Jalousie mehrere Zustände ab, und
 auf einer großen Anlage ist das spürbare Last. Eingeschaltet läuft sie höchstens
 einmal je Viertelstunde.
+
+**Hat sich danach etwas bewegt?** Eingeschaltet liest das Plugin außerdem
+unmittelbar **vor** jedem Befehl (Takt, `aktion=jetzt`, Knopf im Reiter Test)
+den Zustand `position` jeder Jalousie – höchstens 40, wie die Zählung – und der
+Fünfminutentakt misst danach dieselben Zustände nach, bis sich eine Position um
+mindestens 0,01 geändert hat oder 30 Minuten vorbei sind. Die Kachel *zuletzt
+gesendet* im Reiter Test sagt, bei wie vielen Rollläden und wann die Änderung
+festgestellt wurde. „Festgestellt“ ist der Zeitpunkt der Nachmessung im Raster
+des Takts, nicht der Augenblick der Bewegung; und „danach geändert“ heißt nicht
+„vom Befehl bewegt“ – auch eine Hand am Taster ändert die Position. Der Zustand
+`position` ist in der Strukturdatei dieser Anlage an allen 25 Jalousien belegt.
+Kann ein Zustand nicht gelesen werden, endet die Runde, und der nächste Takt
+versucht es wieder.
+
+## Wetter aus der Ecowitt-Weiche (ab Werk aus)
+
+Eingeschaltet (Reiter *Einstellungen*, Abschnitt *Wetter aus der
+Ecowitt-Weiche*) hält der Fünfminutentakt einen fälligen Befehl zurück, solange
+
+* die Solarstrahlung (Kennung `0x15`) unter der **Mindeststrahlung** liegt
+  (Vorgabe 120 W/m², die Schwelle der WMO für Sonnenschein; die Station misst
+  Globalstrahlung, es ist also eine Näherung; 0 = nicht prüfen), oder
+* der größere Wert aus Windgeschwindigkeit (`0x0B`) und Böe (`0x0C`) über dem
+  **Höchstwert** liegt (Vorgabe 0 = nicht prüfen; Einheiten m/s, km/h, mph,
+  Knoten und ft/s werden umgerechnet).
+
+Ohne Sonne holt das A nur Automatiken zurück, die jemand bewusst abgeschaltet
+hat. Ein Zurückhalten ist **keine Störung** – `OK` bleibt 1, und der nächste
+Takt fragt erneut.
+
+**Die Quelle** ist der Endpunkt der Ecowitt-Weiche auf demselben LoxBerry,
+`http://127.0.0.1:<Port des Webservers>/plugins/ecowittweiche/live.php`, mit
+ihrem Wortzeichen (steht in der Weiche im Reiter *Einbindung in Loxone* in der
+Adresse; leer lassen, wenn dort keines gesetzt ist). Dateien der Weiche liest
+dieses Plugin nie. Die Weiche reicht das JSON der Station unverändert durch;
+eine Anzeige in Lux oder Beaufort oder die Striche einer Station ohne Funk zum
+Außensensor heißen „ohne Aussage“ und halten nichts zurück.
+
+**Fällt die Weiche aus** – zehn Minuten lang kein brauchbarer Wert, weil sie
+nicht antwortet, das Wortzeichen nicht passt (403), sie keine Station erreicht
+(503) oder nicht installiert ist (404) –, gilt das **bisherige Verhalten**: der
+Befehl geht ohne Wetterbedingung hinaus. Das Protokoll sagt es höchstens einmal
+je Stunde, und der Reiter Test zeigt in der Zeile *Wetter aus der
+Ecowitt-Weiche* den Abruf mit Grund. Im Reiter Test fragt das Plugin die Weiche
+dafür selbst, sonst zeigt die Zeile den letzten Abruf des Takts.
+
+*Befehl jetzt senden*, `aktion=jetzt` und `bw_lauf.php --jetzt` fragen kein
+Wetter: wer den Befehl schickt, meint ihn – wie bei Zeitfenster und Abstand.
+`bw_lauf.php --probe` nennt die Wetterentscheidung mit.
 
 ## Das Protokoll
 

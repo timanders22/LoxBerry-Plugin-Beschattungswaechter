@@ -133,6 +133,20 @@ if (!$ziele) {
                      (int) floor($alter / 60), (int) round($wartezeit / 60));
 }
 
+/* WETTER AUS DER ECOWITT-WEICHE (Wetter-1, Verbesserungsbau 30.09.2026), AB
+   WERK AUS. Gefragt wird erst, wenn ein Befehl sonst faellig waere - und nie
+   bei --jetzt: wer den Befehl schickt, meint ihn. Ein Zurueckhalten ist keine
+   Stoerung (OK bleibt 1); der naechste Takt fragt erneut. Schweigt die Weiche
+   laenger als bw_wetter_frist(), gilt das bisherige Verhalten. Die Probe
+   fragt, legt aber nichts ab. */
+$bw_wetter = null;
+if ($grund === '' && !$bw_jetzt && !empty($c['wetter_ein'])) {
+    $bw_wetter = bw_wetter_entscheiden($c, !$bw_probe);
+    if ($bw_wetter['sperrt'] !== '') {
+        $grund = 'Wetter: ' . bw_wetter_protokollsatz($bw_wetter);
+    }
+}
+
 if ($bw_probe) {
     /* Der Trockenlauf laeuft durch DENSELBEN Weg - alle Wachen greifen echt,
        nur das Senden unterbleibt. Und er uebernimmt NICHT den Wortlaut des
@@ -140,6 +154,9 @@ if ($bw_probe) {
        gesendet wurde, ist eine stille Falschaussage. */
     bw_trocken(true);
     echo 'PROBE - es wird nichts gesendet.' . "\n";
+    if ($bw_wetter !== null) {
+        echo '  Wetter (Ecowitt-Weiche): ' . bw_wetter_protokollsatz($bw_wetter) . "\n";
+    }
     if ($grund !== '') {
         echo '  Ein regulaerer Lauf taete jetzt nichts: ' . $grund . "\n";
     }
@@ -164,6 +181,19 @@ if ($grund !== '') {
      * Ueberwachung legte, hatte eine Dauerstoerung. */
     /* Eine misslungene Zaehlung ist eine Stoerung, bis wieder eine gelingt
        (C3, Frage 6/11) - OK und status/ok gehen darueber auf 0. */
+    /* DIE WIRKUNG DES LETZTEN BEFEHLS NACHMESSEN (b1, Verbesserungsbau
+       30.09.2026): nur mit eingeschalteter Wirkungsmessung und nur, solange
+       eine Messung offen ist. Dieselbe Sperre wie jeder Weg, der stand.json
+       lesen-aendern-schreibend anfasst; ist sie belegt, misst der naechste
+       Takt. */
+    if (bw_wirkung_offen($c, $stand)) {
+        $bw_nsperre = bw_sperre();
+        if ($bw_nsperre !== false) {
+            bw_stand_schreiben(bw_wirkung_nachmessen($c, bw_stand_lesen()));
+            fclose($bw_nsperre);
+            $stand = bw_stand_lesen();
+        }
+    }
     bw_lauf_schreiben(!$bw_stoerung && !bw_zaehlung_misslungen($c, $stand));
     bw_nach_update_merker_weg();
     bw_mqtt_lebenszeichen($c);
@@ -196,6 +226,8 @@ $code_fehler = 0;
 $code_gut = 0;
 $letzter_text = '';
 $ergebnisse = array();
+/* Die Positionen VOR dem Befehl (b1) - null, wenn die Wirkungsmessung aus ist. */
+$bw_vorher = bw_wirkung_vorher($c);
 foreach ($ziele as $z) {
     $r = bw_senden($c, $z['uuid'], $z['befehl']);
     $ergebnisse[] = $r;
@@ -226,6 +258,8 @@ $letzter_tag = isset($stand['tag']) ? (string) $stand['tag'] : '';
    ist die, die hier schon stand, herausgezogen nach bw_stand_nach_senden(). */
 $stand = bw_stand_nach_senden($stand, $ergebnisse);
 $stand['tag'] = $heute;
+/* b1: die Nachmessung beginnt; der naechste Takt vergleicht. */
+$stand = bw_wirkung_beginnen($stand, $bw_vorher, $ergebnisse);
 
 /* Die Wirkung messen, nicht den Rueckgabewert - aber nur, wenn der Anwender
    es eingeschaltet hat, und hoechstens einmal je Viertelstunde: die Messung

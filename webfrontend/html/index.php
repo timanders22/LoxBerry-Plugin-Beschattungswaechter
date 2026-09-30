@@ -201,6 +201,8 @@ if ($bw_aktion === 'jetzt') {
     }
     $bw_gut = 0;
     $bw_ergebnisse = array();
+    /* Die Positionen VOR dem Befehl (b1) - null, wenn die Wirkungsmessung aus ist. */
+    $bw_vorher = bw_wirkung_vorher($bw_cfg);
     foreach ($bw_ziele as $bw_z) {
         $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
         $bw_ergebnisse[] = $bw_r;
@@ -211,6 +213,7 @@ if ($bw_aktion === 'jetzt') {
        Fehlschlags, letzte_ok nur, wenn ALLE Ziele angenommen haben. Bis
        0.9.21 galt letzte_ok hier schon bei einem Teilerfolg. */
     $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
+    $bw_st = bw_wirkung_beginnen($bw_st, $bw_vorher, $bw_ergebnisse);
     $bw_code = (int) $bw_st['code'];
     bw_stand_schreiben($bw_st);
     /* takt = false: der Endpunkt sagt etwas ueber den Erfolg DIESES Befehls
