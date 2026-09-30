@@ -62,10 +62,38 @@ else
     echo "<INFO> bw_lauf.php oder php fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
 fi
 ENTFERNT=0
-if [ -n "$BASE" ] && [ -f "$BASE/config/plugins/$PFOLDER.backup.json" ]; then
-    rm -f "$BASE/config/plugins/$PFOLDER.backup.json" 2>/dev/null && ENTFERNT=1
-fi
-[ -n "$BASE" ] && rm -rf "$BASE/data/plugins/$PFOLDER" 2>/dev/null
+UEBRIG=""
+# Alles NEBEN den Ordnern, was dieses Plugin anlegt (I1, Entscheidung 1): die
+# Zweitschrift, ihre Zwischenstufe .neu, die unlesbare Fassung .kaputt, das
+# gemerkte alte MQTT-Praefix - je auch als .alt einer frueheren Installation -
+# und die Marke der Aktualisierung. Bis 0.9.21 blieben .alt, .neu und die
+# Marke liegen (gemessen, Pruefbericht Installer D1). Nur Namen, die mit dem
+# eigenen Ordnernamen beginnen, und der ist vorher geprueft.
+case "$PFOLDER" in
+    ''|*/*|*..*)
+        echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - neben den Ordnern wurde nichts entfernt."
+        ;;
+    *)
+        for bw_f in "$BASE/config/plugins/$PFOLDER.backup.json" \
+                    "$BASE/config/plugins/$PFOLDER.backup.json.alt" \
+                    "$BASE/config/plugins/$PFOLDER.backup.json.neu" \
+                    "$BASE/config/plugins/$PFOLDER.backup.json.neu.alt" \
+                    "$BASE/config/plugins/$PFOLDER.backup.json.kaputt" \
+                    "$BASE/config/plugins/$PFOLDER.backup.json.kaputt.alt" \
+                    "$BASE/config/plugins/$PFOLDER.mqtt_praefix_alt" \
+                    "$BASE/config/plugins/$PFOLDER.mqtt_praefix_alt.alt" \
+                    "$BASE/data/plugins/$PFOLDER.upgrade_laeuft"; do
+            if [ -e "$bw_f" ] || [ -L "$bw_f" ]; then
+                if rm -f "$bw_f" 2>/dev/null && [ ! -e "$bw_f" ]; then
+                    ENTFERNT=1
+                else
+                    UEBRIG="$UEBRIG $bw_f"
+                fi
+            fi
+        done
+        rm -rf "$BASE/data/plugins/$PFOLDER" 2>/dev/null
+        ;;
+esac
 # Rest der Fassung 0.9.0 - siehe postinstall.sh. Auch hier nur die eigene
 # Datei und das dann leere Verzeichnis, nichts Fremdes.
 ALT="$BASE/system/cron/cron.15min/$PFOLDER"
@@ -75,8 +103,11 @@ if [ -n "$BASE" ] && [ -d "$ALT" ]; then
     rm -f "$ALT/cron.05min"
     rmdir "$ALT" 2>/dev/null
 fi
-if [ "$ENTFERNT" = "1" ]; then
-    echo "<OK> Beschattungswaechter entfernt, Sicherung geloescht."
+if [ -n "$UEBRIG" ]; then
+    echo "<WARNING> Liegen geblieben, bitte von Hand entfernen:$UEBRIG"
+    echo "<WARNING> Die Sicherung traegt das Merkwort des Endpunkts."
+elif [ "$ENTFERNT" = "1" ]; then
+    echo "<OK> Beschattungswaechter entfernt, Sicherung und Merker neben den Ordnern geloescht."
 else
     echo "<OK> Beschattungswaechter entfernt."
 fi

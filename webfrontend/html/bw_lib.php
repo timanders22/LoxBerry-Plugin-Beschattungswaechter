@@ -141,6 +141,7 @@ function bw_paths()
         $p['cfgdatei'] = $p['config'] . '/beschattung.json';
         $p['sicherung'] = $p['config'] . '/beschattung.backup.json';
         $p['logdatei'] = $p['log'] . '/beschattung.log';
+        $p['praefix_alt'] = $p['config'] . '/beschattung.mqtt_praefix_alt';
         return $p;
     }
     $cfg = getenv('LBPCONFIGDIR');
@@ -161,6 +162,10 @@ function bw_paths()
        Fall mit, fuer den es sie gibt. */
     $p['sicherung'] = $lb . '/config/plugins/' . $ordner . '.backup.json';
     $p['logdatei'] = $p['log'] . '/beschattung.log';
+    /* Das zuletzt benutzte ALTE MQTT-Praefix (M2) - NEBEN dem Konfigordner
+       wie die Zweitschrift: der Installer raeumt den Ordner bei jedem Upgrade
+       ab, und die Deinstallation braucht den Namen noch. */
+    $p['praefix_alt'] = $lb . '/config/plugins/' . $ordner . '.mqtt_praefix_alt';
     return $p;
 }
 
@@ -332,9 +337,21 @@ function bw_wert_pruefen($schluessel, $wert)
         case 'ms_nr':
             return $s === '' || preg_match('/^[0-9]{1,3}$/', $s) === 1;
         case 'aktionstoken':
-            /* Leer heisst "abgeschaltet", und das ist erlaubt. Sonst genau die
-               Form, die bw_token_neu() erzeugt. */
-            return $s === '' || preg_match('/^[0-9a-f]{16,64}$/', $s) === 1;
+            /* NUR EINE ZEICHENKETTE (C6, Durchgang 30.09.2026). Bis 0.9.21 ging
+               eine JSON-Zahl aus einer Sicherung durch: (string) machte aus
+               1234567890123456 eine gueltige Form, und in der Datei stand
+               danach eine Zahl - fuer bw_hat_inhalt() kein Merkwort.
+               Leer heisst "abgeschaltet" (in einer Sicherung: "keins
+               gesichert", siehe bw_sicherung_lesen()). Sonst jede Form, die
+               ohne Kodierung in eine Adresse passt (Regeln/05, "Das
+               Positivmuster fuer ein Token wird so weit gefasst, wie Token
+               wirklich aussehen"): gemessen am 30.09.2026 an 1023 Token der
+               Pruefstaende unter Werkzeuge/lb*, 14 Formen aus Klein- und
+               Grossbuchstaben, Ziffern und Bindestrich, 10 bis 50 Zeichen.
+               Die bis 0.9.21 geltende Form (16 bis 64 Hexadezimalzeichen)
+               nahm davon 188 an. */
+            return is_string($wert)
+                && ($s === '' || preg_match('/^[A-Za-z0-9_.\-]{1,64}\z/', $s) === 1);
         case 'mqtt_thema':
             /* Das Gateway liest ZEILENWEISE, mit dem Leerzeichen als Trenner
                zwischen Thema und Wert. Ein Praefix mit Leerzeichen oder
@@ -365,11 +382,15 @@ function bw_wert_pruefen($schluessel, $wert)
 /** Einen Wert fuer eine Meldung kurz und ungefaehrlich machen. */
 function bw_kurz($w)
 {
+    /* Uebersetzt (O13, Durchgang 30.09.2026): bw_kurz() geht nur in
+       Meldungen an den Bediener - Formular und Zurueckspielen -, nie ins
+       Protokoll. Bis 0.9.21 stand hier ein deutscher Satz in Umschrift, auch
+       in der englischen Oberflaeche. */
     if (is_array($w)) {
-        return 'Liste mit ' . count($w) . ' Eintraegen';
+        return sprintf(bw_t('TEXT.KURZ_LISTE'), count($w));
     }
     if (is_object($w)) {
-        return 'Objekt';
+        return bw_t('TEXT.KURZ_OBJEKT');
     }
     if (is_bool($w)) {
         return $w ? 'true' : 'false';
@@ -387,11 +408,27 @@ function bw_kurz($w)
  * Der Reiter Test zeigt sie an. Jeder Zustand, den der Code erzeugen kann,
  * braucht seinen Satz: 'neu', 'leer', 'ok', 'kaputt', 'aus_zweitschrift'.
  */
-function bw_config_lage($setzen = null)
+function bw_config_lage($setzen = null, $erste = false)
 {
-    static $l = array('lage' => 'unbekannt', 'fehlend' => array(), 'verworfen' => array());
+    static $l = array('lage' => 'unbekannt', 'fehlend' => array(), 'verworfen' => array(),
+                      'war_kaputt' => false);
+    /* DIE ERSTE LAGE DIESES PROZESSES wird gehalten (O4, Durchgang
+       30.09.2026). Die Oberflaeche ruft bw_config() mehrmals; der erste
+       Aufruf heilt eine beschaedigte Datei aus der Zweitschrift und schreibt
+       sie zurueck, jeder spaetere sieht "ok". Bis 0.9.21 meldete die Zeile im
+       Reiter Test deshalb "in Ordnung", waehrend die .kaputt-Datei daneben
+       lag (Regeln/05, Robonect 1.1.0: "merkt sich den Zustand, bevor die
+       Selbstheilung ihn beseitigt"). Ein spaeteres "ok" ueberschreibt die
+       erste Lage nicht; bw_config_lage(null, true) liefert sie. */
+    static $e = null;
     if ($setzen !== null) {
         $l = $setzen;
+        if ($e === null) {
+            $e = $setzen;
+        }
+    }
+    if ($erste && $e !== null) {
+        return $e;
     }
     return $l;
 }
@@ -412,7 +449,8 @@ function bw_hat_inhalt($d)
     }
     $u = (isset($d['uuid']) && is_scalar($d['uuid'])) ? bw_kennung_sauber((string) $d['uuid']) : '';
     $t = (isset($d['aktionstoken']) && is_string($d['aktionstoken'])) ? trim($d['aktionstoken']) : '';
-    return $u !== '' || preg_match('/^[0-9a-f]{16,64}$/', $t) === 1;
+    /* Seit 0.9.22 dieselbe Form wie bw_wert_pruefen('aktionstoken') (C6). */
+    return $u !== '' || preg_match('/^[A-Za-z0-9_.\-]{1,64}\z/', $t) === 1;
 }
 
 /** Die Zweitschrift - nur, wenn sie lesbar ist UND Inhalt traegt, sonst null. */
@@ -452,6 +490,7 @@ function bw_config($erzeugen = true)
     $fehlend = array();
     $verworfen = array();
     $d = null;
+    $war_kaputt = false;
 
     if (is_file($p['cfgdatei'])) {
         $roh = (string) @file_get_contents($p['cfgdatei']);
@@ -459,6 +498,7 @@ function bw_config($erzeugen = true)
         if (!is_array($d)) {
             $lage = 'kaputt';
             $d = null;
+            $war_kaputt = true;
             if ($erzeugen) {
                 @rename($p['cfgdatei'], $p['cfgdatei'] . '.kaputt');
                 bw_log_wenn_neu('kaputt',
@@ -577,7 +617,8 @@ function bw_config($erzeugen = true)
             . 'Vorgaben: ' . implode(', ', $verworfen));
     }
 
-    bw_config_lage(array('lage' => $lage, 'fehlend' => $fehlend, 'verworfen' => $verworfen));
+    bw_config_lage(array('lage' => $lage, 'fehlend' => $fehlend, 'verworfen' => $verworfen,
+                         'war_kaputt' => $war_kaputt));
     return $c;
 }
 
@@ -606,6 +647,20 @@ function bw_json_schreiben($pfad, $daten, $rechte = 0600)
     if (!is_string($js) || $js === '') {
         return false;
     }
+    return bw_text_schreiben($pfad, $js, $rechte);
+}
+
+/**
+ * Text schreiben - unteilbar, mit den Rechten VOR dem Inhalt.
+ *
+ * Der Weg, den bw_json_schreiben() bis 0.9.21 selbst ging, unveraendert
+ * herausgezogen, damit ihn auch das Formularmerkwort (C8), die Einmalmeldung
+ * der Oberflaeche (O1) und die Abodatei des Gateways (M4) gehen. Die Punkte 2
+ * und 3 der Beschreibung ueber bw_json_schreiben() gelten hier.
+ */
+function bw_text_schreiben($pfad, $inhalt, $rechte = 0600)
+{
+    $js = (string) $inhalt;
     $verz = dirname($pfad);
     if (!is_dir($verz)) {
         @mkdir($verz, 0775, true);
@@ -873,10 +928,15 @@ function bw_kennung_sauber($s)
  */
 function bw_senden(array $c, $uuid = null, $befehl = null)
 {
+    /* ZWEI TEXTE JE GRUND (O13, Durchgang 30.09.2026): 'text' bleibt der
+       deutsche Satz fuer das Protokoll, das einsprachig ist (Regeln/03);
+       'meldung' ist derselbe Grund fuer die Oberflaeche, uebersetzt. Bis
+       0.9.21 stand der deutsche Satz auch in der englischen Oberflaeche. */
     $alle = bw_miniserver();
     if (!$alle) {
         return array('ok' => false, 'code' => 0,
-                     'text' => 'kein Miniserver in der LoxBerry-Konfiguration', 'url' => '');
+                     'text' => 'kein Miniserver in der LoxBerry-Konfiguration',
+                     'meldung' => bw_t('TEXT.SENDEN_KEIN_MS'), 'url' => '');
     }
     $m = bw_miniserver_gewaehlt($c, $alle);
     /* Seit 0.9.13 kann die Auswahl null liefern: ein eingestellter, aber
@@ -886,13 +946,15 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
     if ($m === null) {
         return array('ok' => false, 'code' => 0,
                      'text' => 'der eingestellte Miniserver steht nicht mehr in der '
-                             . 'LoxBerry-Konfiguration', 'url' => '');
+                             . 'LoxBerry-Konfiguration',
+                     'meldung' => bw_t('TEXT.SENDEN_MS_FEHLT'), 'url' => '');
     }
     $uuid = bw_kennung_sauber($uuid === null ? (isset($c['uuid']) ? $c['uuid'] : '') : $uuid);
     $befehl = bw_kennung_sauber($befehl === null ? (isset($c['befehl']) ? $c['befehl'] : '') : $befehl);
     if ($uuid === '' || $befehl === '') {
         return array('ok' => false, 'code' => 0,
-                     'text' => 'Kennung oder Befehl unbrauchbar', 'url' => '');
+                     'text' => 'Kennung oder Befehl unbrauchbar',
+                     'meldung' => bw_t('TEXT.SENDEN_KENNUNG'), 'url' => '');
     }
     /* Der Trockenlauf geht durch DENSELBEN Weg - alle Wachen greifen echt,
        nur das Senden unterbleibt. Eine zweite Funktion, die den Vorgang
@@ -901,6 +963,7 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
     if (bw_trocken()) {
         return array('ok' => true, 'code' => 0, 'probe' => true,
                      'text' => 'PROBE - es wurde NICHTS gesendet',
+                     'meldung' => bw_t('TEXT.SENDEN_PROBE'),
                      'url' => 'http://' . $m['adresse'] . ':' . $m['port'] . '/dev/sps/io/'
                             . rawurlencode($uuid) . '/'
                             . implode('/', array_map('rawurlencode', explode('/', $befehl))));
@@ -930,34 +993,14 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
         $antwort = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $fehler = curl_error($ch);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
         if ($antwort === false && $code === 0) {
             return array('ok' => false, 'code' => 0,
                          'text' => $fehler !== '' ? $fehler : 'keine Antwort', 'url' => $url);
         }
     } else {
-        $vorher = ini_get('default_socket_timeout');
-        @ini_set('default_socket_timeout', (string) $frist);
-        $ctx = stream_context_create(array('http' => array(
-            'method'          => 'GET',
-            'header'          => implode("\r\n", $kopf) . "\r\n",
-            'timeout'         => $frist,
-            'ignore_errors'   => true,
-            'follow_location' => 0,
-            'max_redirects'   => 1,
-            'user_agent'      => 'LoxBerry Beschattungswaechter',
-        )));
-        $antwort = @file_get_contents($url, false, $ctx);
-        if (isset($http_response_header) && is_array($http_response_header)) {
-            /* Bei einer Weiterleitung stehen mehrere Statuszeilen darin; es
-               gilt die letzte. */
-            foreach ($http_response_header as $z) {
-                if (preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $mm)) {
-                    $code = (int) $mm[1];
-                }
-            }
-        }
-        @ini_set('default_socket_timeout', (string) $vorher);
+        /* Der Weg ohne curl - seit 0.9.22 ueber bw_http_ohne_curl() (C4). */
+        list($code, $antwort) = bw_http_ohne_curl($url, $kopf, $frist);
     }
 
     /* Die Adresse OHNE Zugangsdaten zurueckgeben - sie landet im Protokoll
@@ -1118,18 +1161,17 @@ function bw_sicherung_bauen()
  * Datei, deren Schluessel alle bekannt sind, konnte das Plugin bis dahin
  * lautlos stilllegen: von="99:99" ergibt ein Zeitfenster, das nie offen ist.
  *
- * Eine Sicherung aus 0.9.9 oder 0.9.10 kennt ms_nr noch nicht; der Schluessel
- * fehlt dann und behaelt seine Vorgabe - alte Dateien bleiben lesbar.
+ * EINE SICHERUNG AUS 0.9.9 ODER 0.9.10 WIRD ABGELEHNT: sie kennt ms_nr und
+ * aktionstoken noch nicht, und seit 0.9.16 ist eine unvollstaendige Datei
+ * eine Beanstandung (Durchzug vom 07.09.2026; Entscheidung vom 11.09.2026:
+ * "die Abweisung bleibt", Regeln/05). Bis 0.9.21 stand hier, alte Dateien
+ * blieben lesbar und das geltende Merkwort bleibe stehen, wenn der Schluessel
+ * fehlt - beides traf seit 0.9.16 nicht mehr zu, und der Zweig dafuer wurde
+ * nie mehr erreicht (C7, Durchgang 30.09.2026; entfernt).
  *
- * DAS MERKWORT IST DAVON AUSGENOMMEN, und zwar als einziger Schluessel. Es
- * ist der einzige, der sich nicht nacherzeugen laesst: seine Vorgabe ist
- * leer, "da und leer" heisst aber "bewusst abgeschaltet" (bw_token), und
- * damit waechst es nie wieder nach. Am 29.08.2026 nachgestellt: eine
- * Sicherung im Format 0.9.10 zurueckgespielt, danach war das Merkwort fort,
- * die Zweitschrift mit, und der Endpunkt antwortete dem Miniserver dauerhaft
- * mit 403 - gemeldet wurde "22 Werte uebernommen". Traegt die Datei den
- * Schluessel nicht, bleibt deshalb das geltende Merkwort stehen, und die
- * Oberflaeche sagt es.
+ * DAS MERKWORT: ein LEERES in der Datei heisst "keins gesichert" - dann bleibt
+ * das geltende stehen, und die Oberflaeche sagt es (C6). Eine Zahl statt einer
+ * Zeichenkette wird abgewiesen (bw_wert_pruefen()).
  *
  * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
  *                  Hinweise[]).
@@ -1148,14 +1190,6 @@ function bw_sicherung_lesen($roh)
     $neu = bw_vorgaben();
     $bekannt = array_keys($neu);
     $anzahl = 0;
-    if (!array_key_exists('aktionstoken', $daten)) {
-        $bisher = bw_config(false);
-        $bisher = isset($bisher['aktionstoken']) ? trim((string) $bisher['aktionstoken']) : '';
-        if ($bisher !== '') {
-            $neu['aktionstoken'] = $bisher;
-            $hinweise[] = bw_t('TEXT.SICH_TOKEN_BEHALTEN');
-        }
-    }
     foreach ($daten as $k => $w) {
         $k = (string) $k;
         if ($k !== '' && $k[0] === '_') {
@@ -1171,6 +1205,20 @@ function bw_sicherung_lesen($roh)
         }
         $neu[$k] = is_string($w) ? trim($w) : $w;
         $anzahl++;
+    }
+    /* EIN LEERES MERKWORT HEISST "KEINS GESICHERT" (C6, Durchgang
+       30.09.2026). Bis 0.9.21 wurde es uebernommen - "23 Werte uebernommen",
+       und danach wies der Endpunkt jede Adresse in Loxone mit 403 ab
+       (gemessen, Pruefberichte code C6 und Oberflaeche O10). Jetzt bleibt das
+       geltende Merkwort stehen, und die Meldung sagt es. Gilt nur, wenn die
+       Datei den Schluessel traegt - ein fehlender ist weiter eine
+       Beanstandung (unten). */
+    if (array_key_exists('aktionstoken', $daten) && is_string($daten['aktionstoken'])
+            && trim($daten['aktionstoken']) === '') {
+        $bisher = bw_config(false);
+        $bisher = isset($bisher['aktionstoken']) ? trim((string) $bisher['aktionstoken']) : '';
+        $neu['aktionstoken'] = $bisher;
+        $hinweise[] = bw_t($bisher !== '' ? 'TEXT.SICH_TOKEN_BEHALTEN' : 'TEXT.SICH_TOKEN_KEINS');
     }
     if ($anzahl === 0) {
         $mangel[] = bw_t('TEXT.SICH_LEER');
@@ -1341,16 +1389,12 @@ function bw_merkwort()
         @mkdir($verz, 0775, true);
     }
     /* Rechte VOR dem Inhalt: zwischen Anlegen und chmod laege sonst ein
-     * Fenster, in dem das Merkwort fuer alle lesbar ist. */
-    $tmp = $datei . '.tmp.' . getmypid();
-    if (@file_put_contents($tmp, $neu) !== false) {
-        @chmod($tmp, 0600);
-        if (@rename($tmp, $datei)) {
-            @chmod($datei, 0600);
-        } else {
-            @unlink($tmp);
-        }
-    }
+     * Fenster, in dem das Merkwort fuer alle lesbar ist. Bis 0.9.21 sagte
+     * dieser Kommentar das, und der Code darunter tat das Gegenteil: erst
+     * wurde der Inhalt mit den Rechten der umask geschrieben, danach kam
+     * chmod (C8, Durchgang 30.09.2026). Jetzt derselbe Weg wie jede
+     * Konfiguration. */
+    bw_text_schreiben($datei, $neu, 0600);
     $wort = $neu;
     return $wort;
 }
@@ -1430,6 +1474,14 @@ function bw_felder()
         'ZAEHLER'  => array('bez' => 'FELD.ZAEHLER',  'kurz' => 'FELDKURZ.ZAEHLER',  'einheit' => '',  'min' => -1, 'max' => 999,    'zeile' => 1),
         'SCHARF'   => array('bez' => 'FELD.SCHARF',   'kurz' => 'FELDKURZ.SCHARF',   'einheit' => '',  'min' => -1, 'max' => 99,     'zeile' => 1),
         'AUTOMATIKEN' => array('bez' => 'FELD.AUTOMATIKEN', 'kurz' => 'FELDKURZ.AUTOMATIKEN', 'einheit' => '', 'min' => -1, 'max' => 99, 'zeile' => 1),
+        /* Neu 0.9.22 (O5), HINTEN angehaengt: das Alter des letzten
+           Durchgangs. Daran haengt die Ausfallerkennung der Baustein-Liste,
+           nicht an ALTER - das ist das Alter des letzten BEFEHLS und nachts
+           regulaer viele Stunden alt. Die Grenze ist weit: ein Takt, der
+           tagelang steht, darf in Loxone nicht an MaxVal auf 0 fallen und
+           damit wie ein frischer aussehen (Regeln/07, "MaxVal ist eine
+           Validierungsgrenze"). Geht wie ALTER nur ueber HTTP (bw_nur_http()). */
+        'LAUFALTER' => array('bez' => 'FELD.LAUFALTER', 'kurz' => 'FELDKURZ.LAUFALTER', 'einheit' => 's', 'min' => -1, 'max' => 99999999, 'zeile' => 1),
     );
 }
 
@@ -1465,8 +1517,27 @@ function bw_werte(?array $c = null, ?array $stand = null)
     if ($stand === null) { $stand = bw_stand_lesen(); }
     $lauf = bw_lauf_lesen();
     $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
+    /* Das Alter des LAUFS, zur Lesezeit gerechnet (O5): Sekunden seit dem
+       letzten Durchgang des Fuenfminutentakts, -1 wenn noch keiner lief. */
+    $laufts = (int) $lauf['ts'];
+    $laufalter = $laufts > 0 ? max(0, time() - $laufts) : -1;
+    /* OK HAT EINE ALTERSGRENZE (C1, Entscheidung 4 vom 29.09.2026): 0,
+       sobald der letzte Durchgang aelter ist als das Dreifache des
+       Cron-Takts. Bis 0.9.21 stand hier nur das Feld ok aus lauf.json - ein
+       seit zwei Stunden stehender Takt lieferte weiter OK=1 (gemessen,
+       Pruefbericht code C1). Und 0, solange die eingeschaltete Zaehlung
+       zuletzt misslungen ist (C3, Frage 6/11). ALTER bleibt, was es ist: das
+       Alter des letzten BEFEHLS. */
+    $ok = (!empty($lauf['ok']) && $laufalter >= 0 && $laufalter <= bw_ok_grenze()
+           && !bw_zaehlung_misslungen($c, $stand)) ? 1 : 0;
+    /* OHNE MESSUNG EIN STRICH (C3, Entscheidung 5 vom 29.09.2026): nie
+       gemessen oder die Zaehlung abgeschaltet - dann gibt es keine Aussage,
+       und eine -1 oder ein stehengebliebener Altwert saehe aus wie eine. Bis
+       0.9.21 ging hier -1 bzw. der letzte gemessene Wert hinaus, auch nach
+       dem Abschalten. */
+    $gemessen = bw_zaehlung_gilt($c, $stand);
     return array(
-        'OK'          => !empty($lauf['ok']) ? 1 : 0,
+        'OK'          => $ok,
         'AKTIV'       => empty($c['aktiv']) ? 0 : 1,
         'FENSTER'     => bw_im_fenster($c) ? 1 : 0,
         'ZIELE'       => count(bw_ziele($c)),
@@ -1475,9 +1546,108 @@ function bw_werte(?array $c = null, ?array $stand = null)
         'CODE'        => isset($stand['code']) ? (int) $stand['code'] : 0,
         'ALTER'       => $letzte > 0 ? (time() - $letzte) : -1,
         'ZAEHLER'     => isset($lauf['zaehler']) ? (int) $lauf['zaehler'] : -1,
-        'SCHARF'      => isset($stand['scharf']) ? (int) $stand['scharf'] : -1,
-        'AUTOMATIKEN' => isset($stand['automatiken']) ? (int) $stand['automatiken'] : -1,
+        'SCHARF'      => $gemessen ? (int) $stand['scharf'] : '-',
+        'AUTOMATIKEN' => $gemessen ? (int) $stand['automatiken'] : '-',
+        'LAUFALTER'   => $laufalter,
     );
+}
+
+/**
+ * Die Grenze fuer OK: dreimal der Cron-Takt von 300 s (Entscheidung 4 vom
+ * 29.09.2026, C1). Eine Stelle fuer den Endpunkt, MQTT, die Pruefzeile im
+ * Reiter Test und die Schwelle der Baustein-Liste.
+ */
+function bw_ok_grenze()
+{
+    return 3 * 300;
+}
+
+/**
+ * Die Felder, die nur ueber HTTP hinausgehen: sie aendern sich jede Sekunde
+ * und machten jeden Doppelt-senden-Filter wirkungslos; ueber MQTT sagt der
+ * Zeitstempel dasselbe, und der Miniserver rechnet selbst.
+ */
+function bw_nur_http()
+{
+    return array('ALTER', 'LAUFALTER');
+}
+
+/** Gilt die Zaehlung? Eingeschaltet UND schon einmal gemessen (C3). */
+function bw_zaehlung_gilt(array $c, array $stand)
+{
+    return !empty($c['pruefen_ein'])
+        && isset($stand['scharf'], $stand['automatiken'])
+        && (int) $stand['scharf'] >= 0 && (int) $stand['automatiken'] >= 0;
+}
+
+/** Ist die eingeschaltete Zaehlung zuletzt misslungen? (C3, Frage 6/11) */
+function bw_zaehlung_misslungen(array $c, array $stand)
+{
+    return !empty($c['pruefen_ein']) && !empty($stand['zaehlung_fehler']);
+}
+
+/**
+ * Das Ergebnis einer Zaehlung in den Stand eintragen - EINE Stelle fuer den
+ * Lauf, den Endpunkt (aktion=pruefen) und den Knopf im Reiter Test (C3).
+ *
+ * Gelungen: Werte, Zeitpunkt, der Fehlschlag ist erledigt. Misslungen: die
+ * zuletzt gezaehlten Werte bleiben stehen (Frage 6/11), vermerkt wird nur der
+ * Fehlschlag - OK geht darueber auf 0 (bw_werte()). Bis 0.9.21 stand ein
+ * Fehlschlag allein im Protokoll, und OK blieb 1 (gemessen, Pruefbericht
+ * code C3a).
+ */
+function bw_zaehlung_eintragen(array $stand, $ok, array $erg)
+{
+    if ($ok) {
+        $stand['scharf'] = (int) $erg['scharf'];
+        $stand['automatiken'] = (int) $erg['gesamt'];
+        $stand['scharf_ts'] = time();
+        $stand['zaehlung_fehler'] = 0;
+    } else {
+        $stand['zaehlung_fehler'] = 1;
+    }
+    return $stand;
+}
+
+/**
+ * Der Stand nach einem Befehl an alle Ziele - EINE Rechnung fuer den Lauf,
+ * den Endpunkt (aktion=jetzt) und den Knopf "Befehl jetzt senden" (C2,
+ * Durchgang 30.09.2026).
+ *
+ * Bis 0.9.21 rechnete jeder der drei Wege selbst: der Knopf nahm den Code
+ * des LETZTEN Ziels und setzte letzte_ok schon bei einem Teilerfolg, der
+ * Endpunkt ebenso letzte_ok - gemessen mit zwei Zielen, das erste mit HTTP
+ * 500: Knopf {"letzte_ok":<jetzt>,"fehler":1,"code":200}, Lauf
+ * {"letzte_ok":0,"fehler":1,"code":500} (Pruefbericht code C2). Es gilt die
+ * Rechnung des Laufs: der Code des ERSTEN Fehlschlags, erst wenn keiner
+ * fehlschlug der des letzten guten Ziels; letzte_ok nur, wenn ALLE Ziele
+ * angenommen haben.
+ *
+ * $ergebnisse: die Rueckgaben von bw_senden(), in der Reihenfolge der Ziele.
+ */
+function bw_stand_nach_senden(array $stand, array $ergebnisse)
+{
+    $gut = 0;
+    $code_fehler = 0;
+    $code_gut = 0;
+    foreach ($ergebnisse as $r) {
+        if (!empty($r['ok'])) {
+            $gut++;
+            $code_gut = isset($r['code']) ? (int) $r['code'] : 0;
+            continue;
+        }
+        if ($code_fehler === 0) {
+            $code_fehler = isset($r['code']) ? (int) $r['code'] : 0;
+        }
+    }
+    $alles = ($ergebnisse && $gut === count($ergebnisse));
+    $jetzt = time();
+    $stand['letzte'] = $jetzt;
+    $stand['letzte_ok'] = $alles ? $jetzt : (isset($stand['letzte_ok']) ? (int) $stand['letzte_ok'] : 0);
+    $stand['gesendet'] = (isset($stand['gesendet']) ? (int) $stand['gesendet'] : 0) + 1;
+    $stand['fehler'] = $alles ? 0 : ((isset($stand['fehler']) ? (int) $stand['fehler'] : 0) + 1);
+    $stand['code'] = $alles ? $code_gut : $code_fehler;
+    return $stand;
 }
 
 /** Die Antwortzeile fuer den Miniserver. */
@@ -1536,6 +1706,19 @@ function bw_lauf_lesen()
  * genau diesem Zeitstempel. Damit beantwortete die Zaehlung die eine Frage
  * falsch, fuer die es sie gibt.
  */
+/**
+ * Die Marke aus postinstall.sh wegnehmen: der erste Takt nach einem Update ist
+ * gelaufen (I4). Bis dahin meldet bw_befund() einen Hinweis statt "noch nie
+ * gelaufen" - purge_installation hat lauf.json mit dem Datenordner geloescht.
+ */
+function bw_nach_update_merker_weg()
+{
+    $f = bw_paths()['datadir'] . '/erster_takt_nach_update';
+    if (is_file($f)) {
+        @unlink($f);
+    }
+}
+
 function bw_lauf_schreiben($ok, $takt = true)
 {
     $p = bw_paths();
@@ -1754,18 +1937,7 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
         return 0;
     }
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
-    $werte = array();
-    foreach (bw_werte($c, $stand) as $k => $v) {
-        /* ALTER geht NICHT ueber MQTT: es aendert sich jede Sekunde und
-           machte jeden Doppelt-senden-Filter wirkungslos. Der Zeitstempel
-           unten sagt dasselbe, und der Miniserver rechnet selbst. */
-        if ($k === 'ALTER') { continue; }
-        $werte[strtolower($k)] = $v;
-    }
-    $lauf = bw_lauf_lesen();
-    $werte['status/ts'] = (int) $lauf['ts'];
-    $werte['status/zaehler'] = (int) $lauf['zaehler'];
-    $werte['status/ok'] = (int) $lauf['ok'];
+    $werte = bw_mqtt_werte($c, $stand);
     /* Die Altwerte, die der Broker noch haelt (oder alle, wenn er nicht zu
        fragen war), bekommen eine leere retain-Nutzlast UNMITTELBAR vor ihrem
        gueltigen Wert - in derselben Verbindung, als Nachbarzeile (Fall N3).
@@ -1783,7 +1955,115 @@ function bw_mqtt_publish(?array $c = null, ?array $stand = null)
         }
         $zeilen[] = bw_mqtt_zeile($w, $t, $v);
     }
-    return bw_mqtt_senden($gw['udpport'], $zeilen);
+    $n = bw_mqtt_senden($gw['udpport'], $zeilen);
+    if ($n > 0) {
+        /* Der Vollversand traegt auch die drei Zustaende; ihr Merker fuer den
+           Aenderungsversand zieht mit (M1). */
+        bw_mqtt_zustand_merken($w, $werte);
+    }
+    return $n;
+}
+
+/**
+ * Die Werte eines Vollversands, Thema (ohne Praefix) => Wert - EINE Quelle
+ * fuer das Senden und fuer die Pruefzeile "Themenliste gegen Sendecode" im
+ * Reiter Test (O3), die damit nichts senden muss, um zu messen.
+ *
+ * Was nur ueber HTTP geht (bw_nur_http()), fehlt; die drei Lebenszeichen
+ * kommen aus lauf.json dazu.
+ */
+function bw_mqtt_werte(array $c, ?array $stand = null)
+{
+    $werte = array();
+    foreach (bw_werte($c, $stand) as $k => $v) {
+        if (in_array($k, bw_nur_http(), true)) { continue; }
+        $werte[strtolower($k)] = $v;
+    }
+    $lauf = bw_lauf_lesen();
+    $werte['status/ts'] = (int) $lauf['ts'];
+    $werte['status/zaehler'] = (int) $lauf['zaehler'];
+    $werte['status/ok'] = (int) $lauf['ok'];
+    return $werte;
+}
+
+/** Die Themen des Aenderungsversands (M1) - eine Liste fuer Senden und Pruefzeile. */
+function bw_mqtt_zustaende_themen()
+{
+    return array('aktiv', 'ziele', 'fenster');
+}
+
+/**
+ * Die drei Zustaende aktiv, ziele und fenster - nach jedem Lauf, wenn sie sich
+ * geaendert haben, und nach Speichern oder Zurueckspielen (M1, Durchgang
+ * 30.09.2026).
+ *
+ * Bis 0.9.21 gingen sie nur im Vollversand hinaus, und den gibt es nur mit
+ * einem Befehl: im Zeitfenster und hoechstens einmal je Abstand. Wer den
+ * Waechter abschaltete, las ueber MQTT dauerhaft aktiv 1 - zurueckbehalten,
+ * also auch nach jedem Neustart von Broker oder Gateway; fenster ging
+ * ausserhalb des Zeitfensters nie hinaus und stand damit die ganze Nacht auf 1
+ * (gemessen, Pruefbericht code M1).
+ *
+ * Gesendet wird, wenn sich ein Wert oder das Praefix gegenueber dem letzten
+ * Versand geaendert hat, wenn $erzwingen gesetzt ist - und sonst hoechstens
+ * alle 30 Minuten einmal (Regeln/07, "Aenderungen und den vollen Satz in
+ * grobem Takt"): der UDP-Eingang des Gateways verwirft unter Last Datagramme,
+ * und ein verlorenes "fenster 0" bliebe sonst bis zum naechsten Morgen stehen.
+ * Die Werte kommen aus bw_werte(), die Befehlswoerter aus bw_mqtt_retain() -
+ * aktiv und ziele retained, fenster fluechtig.
+ */
+function bw_mqtt_zustaende(?array $c = null, $erzwingen = false)
+{
+    if ($c === null) { $c = bw_config(); }
+    if (empty($c['mqtt_ein'])) { return 0; }
+    $gw = bw_mqtt_gateway_info();
+    if ($gw === null || $gw['udpport'] === 0) { return 0; }
+    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    $alle = bw_werte($c);
+    $werte = array();
+    foreach (bw_mqtt_zustaende_themen() as $t) {
+        $werte[$t] = $alle[strtoupper($t)];
+    }
+    $alt = bw_mqtt_zustand_lesen();
+    $jetzt = time();
+    if (!$erzwingen && $alt['praefix'] === $w && $alt['werte'] === $werte
+        && $alt['ts'] <= $jetzt && $jetzt - $alt['ts'] < 1800) {
+        return 0;
+    }
+    $zeilen = array();
+    foreach ($werte as $t => $v) {
+        $zeilen[] = bw_mqtt_zeile($w, $t, $v);
+    }
+    $n = bw_mqtt_senden($gw['udpport'], $zeilen);
+    if ($n > 0) {
+        bw_mqtt_zustand_merken($w, $werte);
+    }
+    return $n;
+}
+
+/** Der Merker des Aenderungsversands: Praefix, Werte, Zeitpunkt (Datenordner). */
+function bw_mqtt_zustand_lesen()
+{
+    $aus = array('praefix' => '', 'werte' => array(), 'ts' => 0);
+    $f = bw_paths()['datadir'] . '/mqtt_zustand.json';
+    $d = is_file($f) ? json_decode((string) @file_get_contents($f), true) : null;
+    if (is_array($d)) {
+        $aus['praefix'] = (isset($d['praefix']) && is_string($d['praefix'])) ? $d['praefix'] : '';
+        $aus['werte'] = (isset($d['werte']) && is_array($d['werte'])) ? $d['werte'] : array();
+        $aus['ts'] = isset($d['ts']) ? (int) $d['ts'] : 0;
+    }
+    return $aus;
+}
+
+function bw_mqtt_zustand_merken($praefix, array $werte)
+{
+    $m = array();
+    foreach (bw_mqtt_zustaende_themen() as $t) {
+        if (!array_key_exists($t, $werte)) { return false; }
+        $m[$t] = $werte[$t];
+    }
+    return bw_json_schreiben(bw_paths()['datadir'] . '/mqtt_zustand.json',
+        array('praefix' => (string) $praefix, 'werte' => $m, 'ts' => time()), 0644);
 }
 
 /**
@@ -2096,32 +2376,77 @@ function bw_mqtt_leer_themen()
 function bw_mqtt_leeren($runden = 3, $pause_us = 1000000)
 {
     $c = bw_config(false);
-    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    $praefixe = array(bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : ''));
+    /* AUCH DAS ZULETZT BENUTZTE ALTE PRAEFIX (M2, Durchgang 30.09.2026). Bis
+       0.9.21 leerte die Deinstallation nur das aktuelle - nach einem
+       Praefixwechsel blieben die fuenf Zustaende des alten fuer immer im
+       Broker (gemessen, Pruefbericht code M2). */
+    $alt = bw_mqtt_alter_praefix();
+    if ($alt !== '' && !in_array($alt, $praefixe, true)) {
+        $praefixe[] = $alt;
+    }
+    $rc = 0;
+    foreach ($praefixe as $w) {
+        $e = bw_mqtt_raeumen($w, $runden, $pause_us);
+        foreach ($e['zeilen'] as $z) {
+            echo $z . "\n";
+        }
+        $rc = max($rc, (int) $e['rc']);
+    }
+    return $rc;
+}
+
+/**
+ * Die zurueckbehaltenen Themen EINES Praefixes leeren - der Weg, den
+ * bw_mqtt_leeren() bis 0.9.21 fuer das aktuelle Praefix ging, unveraendert
+ * herausgezogen (Runden, Pausen, Nachfrage beim Broker vor der ersten Runde
+ * und nach jeder), damit ihn auch die Oberflaeche beim Praefixwechsel und
+ * beim Abschalten geht (M2). Statt auszugeben sammelt er die Zeilen; wer ruft,
+ * entscheidet, wohin sie gehen.
+ *
+ * Rueckgabe array('rc' => 0 geleert oder nicht nachpruefbar | 1 es steht noch
+ * etwas bzw. der Eingang war nicht erreichbar | 2 kein Eingangsport,
+ * 'zeilen' => Protokollzeilen mit <OK>/<INFO>/<WARNING>, 'n' => Zahl der
+ * Themen, 'offen' => was nach dem Nachlesen noch steht, 'nachgelesen' =>
+ * hat der Broker geantwortet, 'eingang' => war der UDP-Eingang da).
+ */
+function bw_mqtt_raeumen($w, $runden = 3, $pause_us = 1000000)
+{
+    $aus = array('rc' => 0, 'zeilen' => array(), 'n' => 0, 'offen' => array(),
+                 'nachgelesen' => false, 'eingang' => true);
     $gw = bw_mqtt_gateway_info();
     if ($gw === null || $gw['udpport'] === 0) {
-        echo '<INFO> MQTT: in der general.json steht kein UDP-Eingangsport des Gateways - '
-           . 'zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.' . "\n";
-        return 2;
+        $aus['zeilen'][] = '<INFO> MQTT: in der general.json steht kein UDP-Eingangsport des Gateways - '
+           . 'zurueckbehaltene Themen unter ' . $w . '/ wurden nicht geleert.';
+        $aus['rc'] = 2;
+        $aus['eingang'] = false;
+        return $aus;
     }
     $alle = array();
     foreach (bw_mqtt_leer_themen() as $t) { $alle[] = $w . '/' . $t; }
     $n = count($alle);
+    $aus['n'] = $n;
     $f = bw_mqtt_behalten_liste($alle);
     $nachgelesen = ($f['lage'] === 'ok');
     $offen = $nachgelesen ? array_keys($f['belegt']) : $alle;
     if ($nachgelesen && !$offen) {
-        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen unter ' . $w
-           . '/ steht zurueckbehalten - nichts zu leeren.' . "\n";
-        return 0;
+        $aus['zeilen'][] = '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen unter ' . $w
+           . '/ steht zurueckbehalten - nichts zu leeren.';
+        $aus['nachgelesen'] = true;
+        return $aus;
     }
     $eno = 0;
     $etxt = '';
     $fp = @stream_socket_client('udp://127.0.0.1:' . (int) $gw['udpport'], $eno, $etxt, 2);
     if (!$fp) {
-        echo '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
+        $aus['zeilen'][] = '<WARNING> MQTT: der UDP-Eingang des Gateways ist nicht erreichbar (Port '
            . (int) $gw['udpport'] . ') - zurueckbehaltene Themen unter ' . $w
-           . '/ wurden nicht geleert.' . "\n";
-        return 1;
+           . '/ wurden nicht geleert.';
+        $aus['rc'] = 1;
+        $aus['eingang'] = false;
+        $aus['offen'] = $offen;
+        $aus['nachgelesen'] = $nachgelesen;
+        return $aus;
     }
     $zu_leeren = count($offen);
     $datagramme = 0;
@@ -2144,24 +2469,124 @@ function bw_mqtt_leeren($runden = 3, $pause_us = 1000000)
         }
     }
     fclose($fp);
-    echo '<INFO> MQTT: ' . $zu_leeren . ' von ' . $n . ' Themen unter ' . $w . '/ mit leerer Nutzlast '
+    $aus['offen'] = $offen;
+    $aus['nachgelesen'] = $nachgelesen;
+    $aus['zeilen'][] = '<INFO> MQTT: ' . $zu_leeren . ' von ' . $n . ' Themen unter ' . $w . '/ mit leerer Nutzlast '
        . 'an den UDP-Eingang ' . (int) $gw['udpport'] . ' des Gateways gesendet (' . $gelaufen
-       . ' Runde(n), ' . $datagramme . ' Datagramme).' . "\n";
+       . ' Runde(n), ' . $datagramme . ' Datagramme).';
     if ($nachgelesen && !$offen) {
-        echo '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen steht mehr '
-           . 'zurueckbehalten.' . "\n";
-        return 0;
+        $aus['zeilen'][] = '<OK> MQTT: der Broker bestaetigt: keines der ' . $n . ' Themen steht mehr '
+           . 'zurueckbehalten.';
+        return $aus;
     }
     if ($nachgelesen) {
-        echo '<WARNING> MQTT: ' . count($offen) . ' Themen stehen noch zurueckbehalten im Broker ('
+        $aus['zeilen'][] = '<WARNING> MQTT: ' . count($offen) . ' Themen stehen noch zurueckbehalten im Broker ('
            . implode(', ', array_slice($offen, 0, 5)) . (count($offen) > 5 ? ', ...' : '')
-           . '). Von Hand: mosquitto_pub -r -n -t <thema> (mit den Broker-Zugangsdaten).' . "\n";
-        return 1;
+           . '). Von Hand: mosquitto_pub -r -n -t <thema> (mit den Broker-Zugangsdaten).';
+        $aus['rc'] = 1;
+        return $aus;
     }
-    echo '<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang '
+    $aus['zeilen'][] = '<INFO> MQTT: der Broker liess sich nicht befragen - nicht nachgelesen. Der UDP-Eingang '
        . 'verwirft unter Last Datagramme; was stehen bleibt, laesst sich mit '
-       . 'mosquitto_pub -r -n -t <thema> von Hand loeschen.' . "\n";
-    return 0;
+       . 'mosquitto_pub -r -n -t <thema> von Hand loeschen.';
+    return $aus;
+}
+
+/** Das zuletzt benutzte alte Praefix (M2) - '' wenn keines gemerkt oder unzulaessig. */
+function bw_mqtt_alter_praefix()
+{
+    $f = bw_paths()['praefix_alt'];
+    if (!is_file($f)) { return ''; }
+    $s = trim((string) @file_get_contents($f));
+    return bw_wert_pruefen('mqtt_thema', $s) ? bw_mqtt_praefix($s) : '';
+}
+
+/** Ein gewechseltes Praefix merken, damit die Deinstallation es mitnimmt (M2). */
+function bw_mqtt_alter_praefix_merken($praefix)
+{
+    $s = bw_mqtt_praefix($praefix);
+    if (!bw_wert_pruefen('mqtt_thema', $s)) { return false; }
+    return bw_text_schreiben(bw_paths()['praefix_alt'], $s . "\n", 0644);
+}
+
+/**
+ * Was nach einer Aenderung von MQTT-Schalter oder Praefix zu tun ist - aus dem
+ * Reiter MQTT und nach dem Zurueckspielen einer Sicherung (M2, M4, Durchgang
+ * 30.09.2026).
+ *
+ * War MQTT an und wechselt das Praefix oder wird MQTT abgeschaltet, werden
+ * die zurueckbehaltenen Themen des BISHERIGEN Praefixes abgeraeumt und ueber
+ * den Broker nachgelesen (bw_mqtt_raeumen()). Bis 0.9.21 blieben nach einem
+ * Praefixwechsel fuenf Zustaende im Broker, und nach dem Abschalten alle; nach
+ * jedem Neustart von Broker oder Gateway kamen sie wieder in Loxone an
+ * (gemessen, Pruefbericht code M2). Ein gewechseltes Praefix wird gemerkt,
+ * damit die Deinstallation es mitnimmt. Die Abodatei folgt dem neuen Praefix.
+ *
+ * Rueckgabe array('ok' => Meldungen, 'fehler' => Meldungen) fuer die
+ * Oberflaeche - uebersetzt, eingesetzte Werte maskiert. Die Protokollzeilen
+ * des Abraeumens gehen ins Protokoll.
+ */
+function bw_mqtt_nach_aenderung(array $alt, array $neu)
+{
+    $aus = array('ok' => array(), 'fehler' => array());
+    $pa = bw_mqtt_praefix(isset($alt['mqtt_thema']) ? $alt['mqtt_thema'] : '');
+    $pn = bw_mqtt_praefix(isset($neu['mqtt_thema']) ? $neu['mqtt_thema'] : '');
+    if ($pa !== $pn) {
+        bw_mqtt_alter_praefix_merken($pa);
+    }
+    if (!empty($alt['mqtt_ein']) && ($pa !== $pn || empty($neu['mqtt_ein']))) {
+        $e = bw_mqtt_raeumen($pa, 3, 1000000);
+        foreach ($e['zeilen'] as $z) {
+            bw_log('Abraeumen nach Aenderung: ' . $z);
+        }
+        if (!$e['eingang']) {
+            $aus['fehler'][] = sprintf(bw_t('MQTT.RAEUMEN_KEIN_PORT'), bw_e($pa));
+        } elseif ($e['nachgelesen'] && !$e['offen']) {
+            $aus['ok'][] = sprintf(bw_t('MQTT.RAEUMEN_OK'), bw_e($pa));
+        } elseif ($e['nachgelesen']) {
+            $aus['fehler'][] = sprintf(bw_t('MQTT.RAEUMEN_OFFEN'), count($e['offen']), bw_e($pa),
+                bw_e(implode(', ', array_slice($e['offen'], 0, 5))));
+        } else {
+            $aus['fehler'][] = sprintf(bw_t('MQTT.RAEUMEN_UNGEPRUEFT'), bw_e($pa));
+        }
+    }
+    bw_abo_datei($pn, true);
+    return $aus;
+}
+
+/**
+ * Die Abodatei des MQTT-Gateways: config/plugins/<ordner>/mqtt_subscriptions.cfg
+ * mit einer Zeile "<praefix>/#" (M4, Durchgang 30.09.2026).
+ *
+ * Das Gateway V1 liest diese Datei jedes installierten Plugins und abonniert
+ * daraus, beim Start und bei jeder Aenderung (Regeln/07, am Geraet belegt
+ * 13.09.2026, Midea2Lox). Bis 0.9.21 lieferte dieses Plugin keine; unter V1
+ * kam ohne einen Eintrag von Hand am Miniserver nichts an, und nach einem
+ * Praefixwechsel zeigte der Eintrag ins Leere. Mitgeliefert wird
+ * "beschattung/#"; beim Speichern, nach dem Zurueckspielen und in jedem Lauf
+ * wird sie nachgefuehrt, NUR wenn sie abweicht (Bauart Einspeisebremse
+ * 0.9.20, BatterieBMS 0.9.30). Ob Gateway V2 die Datei liest, ist NICHT
+ * gemessen. Geschrieben wird nur in einer Anlage, nie in ein Archiv.
+ *
+ * Rueckgabe array(pfad, steht das Praefix darin?).
+ */
+function bw_abo_datei($praefix, $schreiben = false)
+{
+    $p = bw_paths();
+    $pfad = $p['config'] . '/mqtt_subscriptions.cfg';
+    $soll = bw_mqtt_praefix($praefix) . '/#';
+    $roh = is_readable($pfad) ? (string) @file_get_contents($pfad) : '';
+    $da = in_array($soll, array_map('trim', preg_split('/\r?\n/', $roh)), true);
+    if ($schreiben && $p['lbhome'] !== '' && $roh !== $soll . "\n" && is_dir($p['config'])) {
+        if (bw_text_schreiben($pfad, $soll . "\n", 0644)) {
+            bw_log('MQTT: Abodatei des Gateways gesetzt: ' . $soll . ' (' . $pfad . ').');
+            $da = true;
+        } else {
+            bw_log_wenn_neu('abo_datei', 'MQTT: die Abodatei ' . $pfad . ' liess sich nicht '
+                . 'schreiben - unter Gateway V1 muss das Abo ' . $soll . ' von Hand eingetragen werden.');
+        }
+    }
+    return array($pfad, $da);
 }
 
 /** Die Themen, die dieses Plugin veroeffentlicht - fuer die Tabelle im Reiter. */
@@ -2171,7 +2596,9 @@ function bw_mqtt_themen(?array $c = null)
     $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
     $aus = array();
     foreach (bw_felder() as $k => $i) {
-        if ($k === 'ALTER') { continue; }
+        /* Dieselbe Liste wie beim Senden (bw_nur_http()) - seit 0.9.22 auch
+           LAUFALTER. */
+        if (in_array($k, bw_nur_http(), true)) { continue; }
         $aus[$w . '/' . strtolower($k)] = $i['bez'];
     }
     $aus[$w . '/status/ts'] = 'FELD.TS';
@@ -2421,9 +2848,35 @@ function bw_holen($url, array $kopf, $frist)
         $a = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $f = curl_error($ch);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
         return array($code, $a === false ? null : $a, $f);
     }
+    list($code, $a) = bw_http_ohne_curl($url, $kopf, $frist);
+    return array($code, $a === false ? null : $a, $code === 0 ? 'keine Antwort' : '');
+}
+
+/**
+ * Ein HTTP-Abruf OHNE curl - der gemeinsame Weg von bw_senden() und
+ * bw_holen() (C4, Durchgang 30.09.2026).
+ *
+ * Bis 0.9.21 lasen beide die Statuszeilen aus der Variablen, die PHP nach
+ * file_get_contents() im Aufrufer anlegt. PHP 8.5 meldet schon beim
+ * UEBERSETZEN der Bibliothek, dass sie verfaellt - also bei jedem Laden,
+ * auch mit curl, auch aus uninstall/uninstall (bw_lauf.php --mqtt-leeren
+ * mit 2>&1), und damit im Installationsprotokoll. Unter PHP 9 fiele der Weg
+ * ganz aus. Eine Weiche nach der Fassung genuegt nicht: schon die Nennung
+ * der Variablen loest die Meldung aus.
+ *
+ * Jetzt: fopen() mit demselben Kontext, die Kopfzeilen aus
+ * stream_get_meta_data()['wrapper_data'] - das traegt von 7.4 bis 8.5.
+ * Zeitschranke, keine Weiterleitung (follow_location 0) und ignore_errors
+ * wie bisher; bei einer Weiterleitung stehen mehrere Statuszeilen darin, es
+ * gilt die letzte.
+ *
+ * Rueckgabe: array(HTTP-Code oder 0, Rumpf oder false).
+ */
+function bw_http_ohne_curl($url, array $kopf, $frist)
+{
     $vorher = ini_get('default_socket_timeout');
     @ini_set('default_socket_timeout', (string) $frist);
     $ctx = stream_context_create(array('http' => array(
@@ -2431,15 +2884,23 @@ function bw_holen($url, array $kopf, $frist)
         'timeout' => $frist, 'ignore_errors' => true,
         'follow_location' => 0, 'max_redirects' => 1,
         'user_agent' => 'LoxBerry Beschattungswaechter')));
-    $a = @file_get_contents($url, false, $ctx);
     $code = 0;
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        foreach ($http_response_header as $z) {
-            if (preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $t)) { $code = (int) $t[1]; }
+    $rumpf = false;
+    $fh = @fopen($url, 'r', false, $ctx);
+    if ($fh !== false) {
+        $meta = stream_get_meta_data($fh);
+        $zeilen = (isset($meta['wrapper_data']) && is_array($meta['wrapper_data']))
+            ? $meta['wrapper_data'] : array();
+        foreach ($zeilen as $z) {
+            if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $t)) {
+                $code = (int) $t[1];
+            }
         }
+        $rumpf = stream_get_contents($fh);
+        fclose($fh);
     }
     @ini_set('default_socket_timeout', (string) $vorher);
-    return array($code, $a === false ? null : $a, $code === 0 ? 'keine Antwort' : '');
+    return array($code, $rumpf);
 }
 
 
@@ -2482,6 +2943,19 @@ function bw_befund(?array $c = null)
     $ziele = bw_ziele($c);
     $p = bw_paths();
 
+    /* WAEHREND EINER AKTUALISIERUNG EIN HINWEIS, KEIN FEHLER (I4, Durchgang
+       30.09.2026). preupgrade.sh legt die Marke als Erstes an, postinstall.sh
+       raeumt sie ab. Dazwischen fehlen Cron-Datei, Konfiguration und
+       lauf.json, und bis 0.9.21 meldete der Healthcheck in dieser Luecke
+       Stufe 3 oder 4 - cron.daily startet 02-pluginsupdate und
+       03-healthcheck gleichzeitig, und healthcheck.pl legt das Ergebnis
+       retained in den Broker (Pruefbericht Installer I4). */
+    $marke = $p['lbhome'] !== ''
+        ? $p['lbhome'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft' : '';
+    if ($marke !== '' && is_file($marke)) {
+        return array(6, bw_t('BEFUND.UPDATE_LAEUFT'));
+    }
+
     $cron = $p['lbhome'] !== ''
         ? $p['lbhome'] . '/system/cron/cron.05min/' . $p['plugin'] : '';
     if ($cron !== '' && !is_file($cron)) {
@@ -2499,6 +2973,13 @@ function bw_befund(?array $c = null)
         return array(6, bw_t('BEFUND.AUS'));
     }
     if ((int) $lauf['ts'] === 0) {
+        /* Nach einem Update ist "noch nie gelaufen" falsch: purge_installation
+           hat lauf.json geloescht, und der erste Takt steht noch aus.
+           postinstall.sh legt dafuer eine Marke in den Datenordner, der Lauf
+           nimmt sie weg (I4). */
+        if (is_file($p['datadir'] . '/erster_takt_nach_update')) {
+            return array(6, bw_t('BEFUND.NACH_UPDATE'));
+        }
         return array(4, bw_t('BEFUND.NIE_GELAUFEN'));
     }
     $alter = time() - (int) $lauf['ts'];
@@ -2514,7 +2995,9 @@ function bw_befund(?array $c = null)
         return array(4, sprintf(bw_t('BEFUND.FEHLER1'), $fehler));
     }
     $text = sprintf(bw_t('BEFUND.OK'), count($ziele), (int) round($alter / 60));
-    if (isset($stand['scharf']) && (int) $stand['scharf'] >= 0) {
+    /* Nur eine geltende Zaehlung (C3) - abgeschaltet hiesse der alte Wert
+       sonst weiter "gemessen". */
+    if (bw_zaehlung_gilt($c, $stand)) {
         $text .= ' ' . sprintf(bw_t('BEFUND.SCHARF'),
                                (int) $stand['scharf'], (int) $stand['automatiken']);
     }
@@ -2676,8 +3159,13 @@ function bw_vorlage($art, ?array $c = null)
     $token = isset($c['aktionstoken']) ? (string) $c['aktionstoken'] : '';
     $hinweis = bw_t('VORLAGE.HINWEIS');
     if ($art === 'out') {
-        $adresse = '/dev/udp/0.0.0.0/1';   /* wird unten ersetzt */
-        $adresse = $host;
+        /* Mit http:// wie die Eingangsvorlage und die Ausgangsvorlagen der
+           uebrigen Linien (O6, Durchgang 30.09.2026). Bis 0.9.21 stand hier der
+           blanke Rechnername, davor eine Zeile, die gleich wieder
+           ueberschrieben wurde. Ob Loxone Config die blanke Form ebenso
+           ausfuehrt, ist NICHT gemessen - die Form mit http:// ist die aller
+           anderen Linien und der Ausfuhren in XML_Vorlagen_0.9.10. */
+        $adresse = 'http://' . $host;
         $cmds = array();
         $cmds[] = array(
             'title'   => 'BW Befehl jetzt senden',
@@ -2699,7 +3187,10 @@ function bw_vorlage($art, ?array $c = null)
         return array('VQ_Beschattungswaechter.xml', bw_xml_virtual_out(array(
             'title'   => 'Beschattungswächter Befehle',
             'comment' => 'Beschattungswächter (LoxBerry-Plugin)',
-            'hint'    => $hinweis,
+            /* Die Erklaerung der Befehle steht HIER, im Hinweis der Wurzel
+               (O7): der Kommentar eines Befehls wird zum Anzeigenamen und
+               bleibt deshalb unter 40 Zeichen. */
+            'hint'    => $hinweis . ' ' . bw_t('VORLAGE.HINWEIS_BEFEHLE'),
             'address' => $adresse,
         ), $cmds));
     }
@@ -2799,4 +3290,196 @@ function bw_gekuerzt($s, $n)
         $k = substr($k, 0, -1);
     }
     return $k;
+}
+
+/**
+ * Ein Zeitpunkt fuer eine Kachel: heute nur die Uhrzeit, sonst mit Datum (O9,
+ * Durchgang 30.09.2026). Bis 0.9.21 stand ein drei Tage alter Befehl als
+ * "04:52:17" da - und sah aus wie einer von heute.
+ */
+function bw_zeitpunkt($ts)
+{
+    $ts = (int) $ts;
+    return date('Y-m-d', $ts) === date('Y-m-d') ? date('H:i:s', $ts) : date('Y-m-d H:i:s', $ts);
+}
+
+/**
+ * Die Einmalmeldung fuer Post/Redirect/Get (O1, Durchgang 30.09.2026), Bauart
+ * BatterieBMS 0.9.30 und AudiConnect 0.9.22 nach Regeln/04 ("Jeder
+ * POST-Handler endet mit einer Umleitung", Nachtrag Raumklima 0.11.8):
+ * data/plugins/<ordner>/einmalmeldung.json, 0600, nur beim GET gelesen und
+ * dabei geloescht, aelter als 120 s verworfen. Zugangsdaten stehen nie
+ * darin: die Ergebnisse der Befehle tragen Adresse und Kennung, das Kennwort
+ * des Miniservers geht nie in eine Adresse (bw_senden()).
+ */
+function bw_einmal_schreiben(array $daten)
+{
+    $p = bw_paths();
+    if ($p['datadir'] === '') {
+        return false;
+    }
+    $daten['zeit'] = time();
+    $js = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return is_string($js) && bw_text_schreiben($p['datadir'] . '/einmalmeldung.json', $js, 0600);
+}
+
+/** Die Einmalmeldung lesen und loeschen - Rueckgabe null, wenn keine gilt. */
+function bw_einmal_lesen()
+{
+    $f = bw_paths()['datadir'] . '/einmalmeldung.json';
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) {
+        return null;
+    }
+    $aus = array('meldungen' => array(), 'fehler' => array(), 'ergebnisse' => array(),
+                 'zaehlung' => null, 'tab' => '');
+    foreach (array('meldungen', 'fehler') as $k) {
+        if (isset($d[$k]) && is_array($d[$k])) {
+            foreach ($d[$k] as $m) {
+                if (is_string($m)) { $aus[$k][] = $m; }
+            }
+        }
+    }
+    if (isset($d['ergebnisse']) && is_array($d['ergebnisse'])) {
+        foreach ($d['ergebnisse'] as $r) {
+            if (is_array($r) && isset($r['nr'], $r['code'])) { $aus['ergebnisse'][] = $r; }
+        }
+    }
+    if (isset($d['zaehlung']) && is_array($d['zaehlung']) && isset($d['zaehlung']['zeilen'])
+            && is_array($d['zaehlung']['zeilen'])) {
+        $aus['zaehlung'] = $d['zaehlung'];
+    }
+    $aus['tab'] = (isset($d['tab']) && is_string($d['tab'])) ? $d['tab'] : '';
+    return $aus;
+}
+
+/**
+ * Den eigenen Endpunkt WIRKLICH aufrufen - ueber 127.0.0.1, mit drei
+ * Ausgaengen (O3, Regeln/04 "Die Selbstpruefung ruft den eigenen Endpunkt
+ * wirklich auf"): 'gut' HTTP 200 mit der Selbsttestzeile, 'falsch' jede
+ * andere Antwort (Code und Anfang des Rumpfes), 'stumm' keine Antwort - ein
+ * Webserver, der nur eine Anfrage zugleich bedient, kann sich waehrend des
+ * Seitenaufbaus nicht selbst aufrufen; das ist ein Hinweis, kein Kreuz.
+ * Aufgerufen wird nur der Selbsttest, er loest nichts aus. Zeitschranke 3 s.
+ * Die Art der Antwort wird am Merkmal $messbar getrennt vom Startwert
+ * entschieden (Regeln/03, Govee 0.9.12).
+ */
+function bw_endpunkt_probe($token)
+{
+    $port = (isset($_SERVER['SERVER_PORT']) && preg_match('/^[0-9]{1,5}\z/', (string) $_SERVER['SERVER_PORT']))
+        ? (int) $_SERVER['SERVER_PORT'] : 80;
+    $url = 'http://127.0.0.1:' . $port
+         . bw_endpunkt_pfad(array('token' => (string) $token, 'selftest' => '1'));
+    $code = 0;
+    $rumpf = false;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_TIMEOUT        => 3,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_USERAGENT      => 'LoxBerry Beschattungswaechter',
+        ));
+        $rumpf = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
+    } else {
+        list($code, $rumpf) = bw_http_ohne_curl($url, array('Accept: text/plain'), 3);
+    }
+    $messbar = ($code > 0);
+    if (!$messbar) {
+        return array('lage' => 'stumm', 'code' => 0, 'anfang' => '');
+    }
+    $text = trim((string) $rumpf);
+    if ($code === 200 && strpos($text, 'SELFTEST;OK=1;TOKEN=OK') === 0) {
+        return array('lage' => 'gut', 'code' => 200, 'anfang' => $text);
+    }
+    return array('lage' => 'falsch', 'code' => $code, 'anfang' => bw_gekuerzt($text, 60));
+}
+
+/**
+ * Stimmt die Themenliste mit dem Sendecode ueberein? (O3) In beide Richtungen
+ * (Regeln/07, WiFi-Scanner-NG 3.2.4: "Je kuerzer die Liste, desto gruener
+ * die Pruefung"): jedes gelistete Thema wird gesendet, und jedes gesendete
+ * steht in der Liste. Verglichen wird bw_mqtt_themen() mit dem, was
+ * bw_mqtt_werte() fuer einen Vollversand und bw_mqtt_zustaende_themen() fuer
+ * den Aenderungsversand bilden - ohne zu senden.
+ * Rueckgabe array(ok, Zahl gelistet, Zahl gesendet, nur gelistet, nur gesendet).
+ */
+function bw_mqtt_themen_pruefen(array $c)
+{
+    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    $liste = array();
+    foreach (array_keys(bw_mqtt_themen($c)) as $t) {
+        $liste[] = (strpos($t, $w . '/') === 0) ? substr($t, strlen($w) + 1) : $t;
+    }
+    $senden = array_keys(bw_mqtt_werte($c, bw_stand_lesen()));
+    foreach (bw_mqtt_zustaende_themen() as $t) {
+        if (!in_array($t, $senden, true)) { $senden[] = $t; }
+    }
+    $nur_liste = array_values(array_diff($liste, $senden));
+    $nur_senden = array_values(array_diff($senden, $liste));
+    $ok = ($liste && $senden && !$nur_liste && !$nur_senden);
+    return array($ok, count($liste), count($senden), $nur_liste, $nur_senden);
+}
+
+/**
+ * Sind die Vorlagen fuer Loxone Config wohlgeformt? (O3) Beide werden gebaut
+ * wie beim Herunterladen und mit simplexml gelesen - bis 0.9.21 geschah das
+ * nur beim Herunterladen, und die Selbstpruefung hatte keine Zeile dafuer.
+ * Rueckgabe: null ohne simplexml, sonst Dateiname => Zahl der Befehle, -1 wenn
+ * nicht wohlgeformt.
+ */
+function bw_vorlagen_pruefen(array $c)
+{
+    if (!function_exists('simplexml_load_string')) {
+        return null;
+    }
+    $aus = array();
+    foreach (array('in' => 'VirtualInHttpCmd', 'out' => 'VirtualOutCmd') as $art => $kind) {
+        list($name, $inhalt) = bw_vorlage($art, $c);
+        $vorher = libxml_use_internal_errors(true);
+        $x = simplexml_load_string($inhalt);
+        libxml_clear_errors();
+        libxml_use_internal_errors($vorher);
+        $aus[$name] = ($x === false) ? -1 : count($x->xpath('//' . $kind));
+    }
+    return $aus;
+}
+
+/**
+ * Die letzten $n nicht leeren Zeilen einer Datei, rueckwaerts mit fseek
+ * gelesen (Regeln/03, "tail per exec() ist nie die Antwort") - fuer die
+ * Fehlerausgabe des Cron-Laufs im Reiter Logdateien (C5).
+ */
+function bw_log_ende($f, $n = 20)
+{
+    clearstatcache(true, $f);
+    if (!is_file($f) || !is_readable($f)) {
+        return array();
+    }
+    $fh = @fopen($f, 'rb');
+    if ($fh === false) {
+        return array();
+    }
+    fseek($fh, 0, SEEK_END);
+    $pos = ftell($fh);
+    $puffer = '';
+    while ($pos > 0 && substr_count($puffer, "\n") <= $n) {
+        $schritt = min(4096, $pos);
+        $pos -= $schritt;
+        fseek($fh, $pos);
+        $puffer = fread($fh, $schritt) . $puffer;
+    }
+    fclose($fh);
+    $zeilen = array();
+    foreach (preg_split('/\r?\n/', $puffer) as $z) {
+        if (trim($z) !== '') { $zeilen[] = $z; }
+    }
+    return array_slice($zeilen, -$n);
 }

@@ -51,6 +51,23 @@ foreach ($bw_kandidaten as $bw_kandidat) {
     }
 }
 if (!$bw_gefunden) {
+    /* WAEHREND EINES UPDATES FEHLT DIE BIBLIOTHEK PLANMAESSIG (I4, Durchgang
+       30.09.2026): der Installer kopiert bin/ vor webfrontend/html/. Liegt
+       die Marke, die preupgrade.sh als Erstes anlegt, ist das ein Hinweis
+       (Stufe 6), kein Fehler. Die Bibliothek ist hier nicht geladen - der
+       Satz steht deshalb fest auf Deutsch. */
+    $bw_marke = (basename(dirname(__DIR__)) === 'plugins')
+        ? dirname(dirname(dirname(__DIR__))) . '/data/plugins/' . basename(__DIR__) . '.upgrade_laeuft'
+        : '';
+    if ($bw_marke !== '' && is_file($bw_marke)) {
+        echo json_encode(array(
+            'desc'   => 'Beschattungswaechter',
+            'status' => 6,
+            'result' => 'Das Plugin wird gerade aktualisiert. Geprüft wird wieder nach dem '
+                      . 'ersten Durchgang des Takts.',
+        ));
+        exit(0);
+    }
     /* Auch der Fehlerfall antwortet in der vorgesehenen Form. Ein
        Healthcheck, der nichts ausgibt, ist von einem, der nicht laeuft,
        nicht zu unterscheiden. */

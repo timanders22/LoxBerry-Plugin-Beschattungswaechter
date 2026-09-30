@@ -193,6 +193,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         $bw_meldungen[] = $bw_fehler
             ? bw_t('TEXT.GESPEICHERT_TEILWEISE') : bw_t('TEXT.GESPEICHERT');
         $bw_cfg = bw_config();
+        /* M1: eingeschaltet und Ziele gehen sofort hinaus, nicht erst mit dem
+           naechsten Befehl - bis 0.9.21 stand nach dem Abschalten ueber MQTT
+           weiter aktiv 1 im Broker. */
+        bw_mqtt_zustaende($bw_cfg, true);
     } else {
         $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
     }
@@ -207,16 +211,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
     $bw_neu = $bw_cfg;
     $bw_neu['mqtt_ein'] = empty($_POST['mqtt_ein']) ? 0 : 1;
     $bw_th = bw_eingabe($_POST, 'mqtt_thema');
+    /* LEER HEISST VORGABE (O8, Durchgang 30.09.2026). Beschriftung und Hilfe
+       sagten bis 0.9.21 "leer lassen genuegt" und nannten den Rechnernamen -
+       der Handler wies das leere Feld aber ab. Jetzt wird die Vorgabe
+       eingetragen, und die Meldung sagt es. Ein Thema aus Leerzeichen ist
+       nicht leer und geht wie bisher durch die Pruefung. */
+    if ($bw_th === '') {
+        $bw_th = bw_vorgaben()['mqtt_thema'];
+        $bw_meldungen[] = sprintf(bw_t('MQTT.PRAEFIX_VORGABE'), bw_e($bw_th));
+    }
     if (bw_wert_pruefen('mqtt_thema', $bw_th)) {
         $bw_neu['mqtt_thema'] = $bw_th;
     } else {
         $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
                                bw_e(bw_t('TEXT.L_THEMA')), bw_e(bw_kurz($bw_th)));
     }
+    $bw_vorher = $bw_cfg;
     if (bw_config_speichern($bw_neu)) {
         $bw_meldungen[] = $bw_fehler
             ? bw_t('TEXT.GESPEICHERT_TEILWEISE') : bw_t('TEXT.GESPEICHERT');
         $bw_cfg = bw_config();
+        /* M2 und M4: nach einem Praefixwechsel oder dem Abschalten werden die
+           zurueckbehaltenen Themen des bisherigen Praefixes abgeraeumt und
+           ueber den Broker nachgelesen; die Abodatei folgt dem Praefix. M1:
+           die drei Zustaende gehen sofort hinaus, unter dem neuen Praefix. */
+        $bw_nach = bw_mqtt_nach_aenderung($bw_vorher, $bw_cfg);
+        $bw_meldungen = array_merge($bw_meldungen, $bw_nach['ok']);
+        $bw_fehler = array_merge($bw_fehler, $bw_nach['fehler']);
+        bw_mqtt_zustaende($bw_cfg, true);
     } else {
         $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
     }
@@ -275,7 +297,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
 }
 
 /* ---------------- Den Rest der 0.9.0 wegraeumen ---------------- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])
+        && empty($_POST['rest_bestaetigt'])) {
+    /* O15, Durchgang 30.09.2026: ohne Bestaetigungshaken passiert nichts
+       (Regeln/04, "Formregeln fuer einen loeschenden Knopf"). Bis 0.9.21
+       loeschte ein Klick sofort. */
+    $bw_fehler[] = bw_t('TEXT.REST_BESTAETIGEN');
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])) {
     $bw_rest0 = ($bw_lb !== '') ? $bw_lb . '/system/cron/cron.15min/' . bw_paths()['plugin'] : '';
     if ($bw_rest0 === '' || !file_exists($bw_rest0)) {
         $bw_fehler[] = bw_t('TEXT.REST_KEINER');
@@ -310,13 +338,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])) {
 $bw_zaehlung = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['zaehlen'])) {
     list($bw_zok, $bw_zmeldung, $bw_zerg) = bw_automatiken($bw_cfg);
+    /* Eine Stelle fuer alle drei Wege (C3): ein Fehlschlag wird vermerkt, die
+       gezaehlten Werte bleiben stehen, OK geht auf 0. */
+    bw_stand_schreiben(bw_zaehlung_eintragen(bw_stand_lesen(), $bw_zok, $bw_zerg));
     if ($bw_zok) {
         $bw_zaehlung = $bw_zerg;
-        $bw_st = bw_stand_lesen();
-        $bw_st['scharf'] = (int) $bw_zerg['scharf'];
-        $bw_st['automatiken'] = (int) $bw_zerg['gesamt'];
-        $bw_st['scharf_ts'] = time();
-        bw_stand_schreiben($bw_st);
     } else {
         $bw_fehler[] = $bw_zmeldung;
     }
@@ -327,40 +353,48 @@ $bw_ergebnisse = array();
 if ($_SERVER['REQUEST_METHOD'] === 'POST'
         && (isset($_POST['jetzt']) || isset($_POST['trocken']))) {
     $bw_ist_probe = isset($_POST['trocken']);
-    if ($bw_ist_probe) { bw_trocken(true); }
-    try {
-        foreach (bw_ziele($bw_cfg) as $bw_z) {
-            $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
-            $bw_r['nr'] = $bw_z['nr'];
-            $bw_r['befehl'] = $bw_z['befehl'];
-            $bw_r['uuid'] = $bw_z['uuid'];
-            $bw_ergebnisse[] = $bw_r;
+    /* DIESELBE SPERRE WIE DER LAUF UND DER ENDPUNKT (C2, Durchgang
+       30.09.2026). Bis 0.9.21 sendete der Knopf ohne Sperre und konnte einen
+       gleichzeitigen Stand des Takts ueberschreiben. Die Probe sendet nichts
+       und schreibt nichts - sie braucht keine. */
+    $bw_lock = $bw_ist_probe ? true : bw_sperre();
+    if ($bw_lock === false) {
+        $bw_fehler[] = bw_t('TEXT.BESETZT');
+    } else {
+        if ($bw_ist_probe) { bw_trocken(true); }
+        try {
+            foreach (bw_ziele($bw_cfg) as $bw_z) {
+                $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
+                $bw_r['nr'] = $bw_z['nr'];
+                $bw_r['befehl'] = $bw_z['befehl'];
+                $bw_r['uuid'] = $bw_z['uuid'];
+                $bw_ergebnisse[] = $bw_r;
+            }
+        } finally {
+            /* Bliebe der Schalter stehen, taete der naechste echte Befehl im
+               selben Prozess still nichts. */
+            bw_trocken(false);
         }
-    } finally {
-        /* Bliebe der Schalter stehen, taete der naechste echte Befehl im
-           selben Prozess still nichts. */
-        bw_trocken(false);
-    }
-    if (!$bw_ergebnisse) {
-        $bw_fehler[] = bw_t('TEXT.KEIN_ZIEL');
-    } elseif (!$bw_ist_probe) {
-        $bw_gut = 0;
-        foreach ($bw_ergebnisse as $bw_r) { if ($bw_r['ok']) { $bw_gut++; } }
-        $bw_st = bw_stand_lesen();
-        $bw_st['letzte'] = time();
-        if ($bw_gut > 0) { $bw_st['letzte_ok'] = time(); }
-        $bw_st['gesendet'] = (isset($bw_st['gesendet']) ? (int) $bw_st['gesendet'] : 0) + 1;
-        $bw_st['fehler'] = ($bw_gut === count($bw_ergebnisse)) ? 0
-            : ((isset($bw_st['fehler']) ? (int) $bw_st['fehler'] : 0) + 1);
-        $bw_st['code'] = (int) $bw_ergebnisse[count($bw_ergebnisse) - 1]['code'];
-        bw_stand_schreiben($bw_st);
-        /* takt = false: der Knopf im Reiter Test sagt etwas ueber DIESEN
-           Befehl und nichts darueber, ob der Fuenfminutenlauf noch geht -
-           siehe bw_lauf_schreiben(). */
-        bw_lauf_schreiben($bw_gut === count($bw_ergebnisse), false);
-        bw_mqtt_publish($bw_cfg, $bw_st);
-        bw_log('von Hand ausgeloest: ' . $bw_gut . ' von ' . count($bw_ergebnisse)
-             . ' Ziel(en) angenommen');
+        if (!$bw_ergebnisse) {
+            $bw_fehler[] = bw_t('TEXT.KEIN_ZIEL');
+        } elseif (!$bw_ist_probe) {
+            $bw_gut = 0;
+            foreach ($bw_ergebnisse as $bw_r) { if ($bw_r['ok']) { $bw_gut++; } }
+            /* Der Stand aus derselben Rechnung wie Lauf und Endpunkt (C2): der
+               Code des ERSTEN Fehlschlags statt des letzten Ziels, letzte_ok
+               nur, wenn alle Ziele angenommen haben. */
+            $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
+            bw_stand_schreiben($bw_st);
+            /* takt = false: der Knopf im Reiter Test sagt etwas ueber DIESEN
+               Befehl und nichts darueber, ob der Fuenfminutenlauf noch geht -
+               siehe bw_lauf_schreiben(). */
+            bw_lauf_schreiben($bw_gut === count($bw_ergebnisse)
+                              && !bw_zaehlung_misslungen($bw_cfg, $bw_st), false);
+            bw_mqtt_publish($bw_cfg, $bw_st);
+            bw_log('von Hand ausgeloest: ' . $bw_gut . ' von ' . count($bw_ergebnisse)
+                 . ' Ziel(en) angenommen');
+        }
+        if (is_resource($bw_lock)) { fclose($bw_lock); }
     }
 }
 
@@ -403,6 +437,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
     } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
         $bw_fehler[] = bw_t('TEXT.SICH_ZU_GROSS');
     } else {
+        $bw_vorher = $bw_cfg;
         list($bw_neu, $bw_mangel, $bw_n, $bw_shinweise) = bw_sicherung_lesen(
             (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
         if ($bw_neu === null) {
@@ -420,12 +455,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
                Bediener sieht keine Aenderung und drueckt noch einmal. */
             $bw_cfg = bw_config();
             $bw_meldungen[] = bw_t('TEXT.SICH_DANACH');
+            /* Wie nach dem Speichern im Reiter MQTT (M1, M2, M4): eine
+               Sicherung kann Schalter und Praefix aendern. */
+            $bw_nach = bw_mqtt_nach_aenderung($bw_vorher, $bw_cfg);
+            $bw_meldungen = array_merge($bw_meldungen, $bw_nach['ok']);
+            $bw_fehler = array_merge($bw_fehler, $bw_nach['fehler']);
+            bw_mqtt_zustaende($bw_cfg, true);
         } else {
             $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
         }
     }
 }
 
+/* ---------------- Post/Redirect/Get (O1, Durchgang 30.09.2026) ----------------
+ *
+ * Jeder POST endet hier mit 303 auf den Reiter, in dem er abgeschickt wurde;
+ * Meldungen, Beanstandungen und die Ergebnistabellen gehen als Einmalmeldung
+ * mit (bw_einmal_schreiben(), 0600, hoechstens 120 s, nur beim GET gelesen).
+ * Bis 0.9.21 zeichnete der POST die Seite selbst, und ein Neuladen schickte
+ * ihn erneut: "Neues Merkwort erzeugen" zweimal hiess zwei neue Merkworte,
+ * die eben in Loxone eingetragenen Adressen waren wieder ungueltig; "Befehl
+ * jetzt senden" zweimal hiess zwei Befehle an den Miniserver (gemessen,
+ * Pruefbericht Oberflaeche O1). Auch ein vom Wachposten abgewiesener POST
+ * leitet um und meldet im GET. Die Herunterladeknoepfe enden vorher mit exit
+ * und kommen hier nicht an. Laesst sich die Einmalmeldung nicht ablegen, wird
+ * wie bisher direkt gezeichnet - lieber ein doppelter POST als eine
+ * verschluckte Meldung. */
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (bw_einmal_schreiben(array('meldungen' => array_values($bw_meldungen),
+                                  'fehler' => array_values($bw_fehler),
+                                  'ergebnisse' => array_values($bw_ergebnisse),
+                                  'zaehlung' => $bw_zaehlung,
+                                  'tab' => $bw_tab))) {
+        header('Location: index.php?form=' . substr($bw_tab, 4), true, 303);
+        exit;
+    }
+} else {
+    $bw_einmal = bw_einmal_lesen();
+    if (is_array($bw_einmal)) {
+        $bw_meldungen = array_merge($bw_meldungen, $bw_einmal['meldungen']);
+        $bw_fehler = array_merge($bw_fehler, $bw_einmal['fehler']);
+        $bw_ergebnisse = $bw_einmal['ergebnisse'];
+        if ($bw_einmal['zaehlung'] !== null) {
+            $bw_zaehlung = $bw_einmal['zaehlung'];
+        }
+        if (in_array($bw_einmal['tab'], $bw_reiter, true)) {
+            $bw_tab = $bw_einmal['tab'];
+        }
+    }
+}
 
 if ($bw_rahmen) {
     LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
@@ -542,6 +620,14 @@ if ($bw_rahmen) {
    von hausstandard_pruefen.py nicht gesehen. */
 foreach ($bw_meldungen as $bw_m) { echo '<div class="sm-hinweis">' . $bw_m . '</div>'; }
 foreach ($bw_fehler as $bw_fm)   { echo '<div class="sm-fehler">' . $bw_fm . '</div>'; }
+/* O2, Durchgang 30.09.2026: der eingestellte Miniserver fehlt in der
+   LoxBerry-Konfiguration. Das steht oben, nicht nur im Protokoll. */
+$bw_ms_nr = trim((string) $bw_cfg['ms_nr']);
+$bw_gewaehlt = bw_miniserver_gewaehlt($bw_cfg, $bw_ms);
+$bw_ms_fehlt = ($bw_ms_nr !== '' && $bw_gewaehlt === null);
+if ($bw_ms_fehlt) {
+    echo '<div class="sm-warnung">' . sprintf(bw_t('TEXT.MS_FEHLT'), bw_e($bw_ms_nr)) . '</div>';
+}
 ?>
 
 <!-- Die Reiterleiste steht AUSGESCHRIEBEN da, nicht in einer Schleife
@@ -584,11 +670,19 @@ foreach ($bw_fehler as $bw_fm)   { echo '<div class="sm-fehler">' . $bw_fm . '</
   <label><?php echo bw_t('TEXT.L_MS'); ?></label>
   <select data-role="none" name="ms_nr">
 <?php
-$bw_gewaehlt = bw_miniserver_gewaehlt($bw_cfg, $bw_ms);
 foreach ($bw_ms as $bw_m2) { ?>
     <option value="<?= bw_e($bw_m2['nr']) ?>"<?= ($bw_gewaehlt !== null && $bw_gewaehlt['nr'] === $bw_m2['nr']) ? ' selected' : '' ?>><?= bw_e($bw_m2['name'] . ' (' . $bw_m2['adresse'] . ')') ?></option>
 <?php } ?>
-<?php if (!$bw_ms) { ?><option value=""><?php echo bw_t('TEXT.KEIN_MS'); ?></option><?php } ?>
+<?php
+/* O2: fehlt der eingestellte Miniserver, steht er als markierte Option da -
+   gewaehlt und mit dem BISHERIGEN Schluessel. Ein Speichern aendert ms_nr damit
+   nie still. Bis 0.9.21 schickte der Browser dann die erste Option, und nach
+   dem naechsten beliebigen Speichern ging "Befehl jetzt senden" an einen
+   anderen Miniserver (gemessen, Pruefbericht Oberflaeche O2). */
+if ($bw_ms_fehlt) { ?>
+    <option value="<?= bw_e($bw_ms_nr) ?>" selected><?= bw_e(sprintf(bw_t('TEXT.MS_FEHLT_OPTION'), $bw_ms_nr)) ?></option>
+<?php } ?>
+<?php if (!$bw_ms && !$bw_ms_fehlt) { ?><option value=""><?php echo bw_t('TEXT.KEIN_MS'); ?></option><?php } ?>
   </select>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_MS'); ?></p>
 </div>
@@ -719,6 +813,11 @@ if ($bw_gw === null) { ?>
   <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 </form>
 
+<?php
+/* M4: das Plugin fuehrt die Abodatei des Gateways selbst. Gemessen wird, ob
+   das Praefix darin steht - nicht behauptet. */
+list($bw_abo_pfad, $bw_abo_da) = bw_abo_datei($bw_cfg['mqtt_thema']);
+?>
 <h3><?php echo bw_t('MQTT.H_ABO'); ?></h3>
 <p><span class="sm-mono"><?= bw_e(bw_mqtt_praefix($bw_cfg['mqtt_thema'])) ?>/#</span></p>
 <?php
@@ -727,6 +826,9 @@ if ($bw_gw === null) { ?>
    einem Eingabefeld, das es dort nicht mehr gibt. */
 if ($bw_gwf >= 2) { ?>
 <div class="sm-hinweis"><?php echo bw_t('MQTT.ABO_V2'); ?></div>
+<?php } elseif ($bw_abo_da) { ?>
+<div class="sm-hinweis"><?= sprintf(bw_t('MQTT.ABO_DATEI'), bw_e($bw_abo_pfad)) ?></div>
+<?php if ($bw_gwf !== 1) { ?><p class="sm-hilfe"><?php echo bw_t('MQTT.ABO_V2'); ?></p><?php } ?>
 <?php } elseif ($bw_gwf === 1) { ?>
 <div class="sm-warnung"><?php echo bw_t('MQTT.ABO_PFLICHT'); ?></div>
 <?php } else { ?>
@@ -811,25 +913,50 @@ foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
 
 <div class="sm-step"><b>4. <?php echo bw_t('LOX.S4_T'); ?></b><br><?php echo bw_t('LOX.S4'); ?></div>
 
-<div class="sm-step"><b>5. <?php echo bw_t('LOX.S5_T'); ?></b><br><?php echo bw_t('LOX.S5'); ?>
+<?php
+/* DIE BAUSTEIN-LISTE (O5, Durchgang 30.09.2026).
+ *   #1 haengt am Lebenszeichen des Takts (LAUFALTER, neu und hinten an die
+ *      Zeile gehaengt), nicht an ALTER: das ist das Alter des letzten Befehls,
+ *      bei einem gesunden Waechter regulaer 30 Minuten und nachts zehn
+ *      Stunden - "ALTER groesser als 900" war ein Dauerfehlalarm und erkannte
+ *      einen toten Takt nicht sicher (gemessen, Pruefbericht Oberflaeche O5).
+ *      Die Schwelle ist die von OK (bw_ok_grenze(), 900 s).
+ *   Die Bausteintypen heissen wie in Loxone Config
+ *      (Werkzeuge/loxone_typ_deutsch.txt, gemessen an den Eigenschaften):
+ *      Schwellwertschalter, Analogkomparator, Oder, Benachrichtigung. Bis
+ *      0.9.21 stand "Statusbaustein oder Merker" - ein Merker vergleicht
+ *      nichts - und "Meldebaustein".
+ *   Die drei Faelle gehen ueber zwei Oder an die Benachrichtigung: sie sendet
+ *      nur beim Wechsel von aus auf ein, und mehrere Quellen unmittelbar an
+ *      ihrem Eingang verschluckt eine dauerhaft aktive die uebrigen
+ *      (Regeln/09). Ein Oder hat genau zwei Eingaenge.
+ *   Verweise auf andere Zeilen werden gerechnet, nicht getippt (Regeln/01).
+ * Spalten: Typ, Name, Aufbau (Schluessel, Argumente), Eingang (Schluessel,
+ * Argumente). */
+$bw_grenze = bw_ok_grenze();
+$bw_bausteine = array(
+    array('LOX.B1_TYP', 'BW Waechter tot', 'LOX.B1_P', array($bw_grenze, (int) round($bw_grenze * 2 / 3)), 'LOX.B1_E', array()),
+    array('LOX.B2_TYP', 'BW Waechter gestoert', 'LOX.B2_P', array(), 'LOX.B2_E', array()),
+    array('LOX.B3_TYP', 'BW Automatik abgeschaltet', 'LOX.B3_P', array(), 'LOX.B3_E', array()),
+    array('LOX.B4_TYP', 'BW Meldung 1 oder 2', 'LOX.B4_P', array(), 'LOX.B4_E', array(1, 2)),
+    array('LOX.B5_TYP', 'BW Meldung 1 bis 3', 'LOX.B5_P', array(), 'LOX.B5_E', array(4, 3)),
+    array('LOX.B6_TYP', 'BW Meldung', 'LOX.B6_P', array(), 'LOX.B6_E', array(5)),
+);
+?>
+<div class="sm-step"><b>5. <?php echo bw_t('LOX.S5_T'); ?></b><br><?php echo sprintf(bw_t('LOX.S5'), count($bw_bausteine)); ?>
 <div class="sm-breit">
 <table class="sm-tbl">
   <tr><th>#</th><th><?php echo bw_t('LOX.BAUSTEIN'); ?></th><th><?php echo bw_t('LOX.NAME'); ?></th><th><?php echo bw_t('LOX.PARAMETER'); ?></th><th><?php echo bw_t('LOX.EINGANG'); ?></th></tr>
 <?php
-$bw_bausteine = array(
-    array('LOX.B1_TYP', 'BW Waechter tot', 'LOX.B1_P', 'LOX.B1_E'),
-    array('LOX.B2_TYP', 'BW Waechter gestoert', 'LOX.B2_P', 'LOX.B2_E'),
-    array('LOX.B3_TYP', 'BW Automatik abgeschaltet', 'LOX.B3_P', 'LOX.B3_E'),
-    array('LOX.B4_TYP', 'BW Meldung', 'LOX.B4_P', 'LOX.B4_E'),
-);
 $bw_nr2 = 0;
 foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
   <tr><td><?= (int) $bw_nr2 ?></td><td><?= bw_e(bw_t($bw_bs[0])) ?></td>
       <td class="sm-mono"><?= bw_e($bw_bs[1]) ?></td>
-      <td><?= bw_e(bw_t($bw_bs[2])) ?></td><td><?= bw_e(bw_t($bw_bs[3])) ?></td></tr>
+      <td><?= bw_e(vsprintf(bw_t($bw_bs[2]), $bw_bs[3])) ?></td><td><?= bw_e(vsprintf(bw_t($bw_bs[4]), $bw_bs[5])) ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.ZU_B1'), 1)) ?></p>
 </div>
 
 <div class="sm-step"><b>6. <?php echo bw_t('LOX.S6_T'); ?></b><br><?php echo bw_t('LOX.S6'); ?>
@@ -858,11 +985,11 @@ foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
 <h2><?php echo bw_t('TEXT.H_TEST'); ?></h2>
 
 <div class="sm-kacheln">
-  <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(date('H:i:s', (int) $bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span></div>
+  <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span></div>
   <!-- letzte_ok wurde bis 0.9.12 an drei Stellen GESCHRIEBEN und an keiner
        gelesen. Der Unterschied zwischen "zuletzt versucht" und "zuletzt
        angenommen" ist genau das, was man beim Suchen wissen will. -->
-  <div class="sm-kachel"><b><?= empty($bw_stand['letzte_ok']) ? '&mdash;' : bw_e(date('H:i:s', (int) $bw_stand['letzte_ok'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE_OK'); ?></span></div>
+  <div class="sm-kachel"><b><?= empty($bw_stand['letzte_ok']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte_ok'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE_OK'); ?></span></div>
   <div class="sm-kachel"><b><?= (int) (isset($bw_stand['gesendet']) ? $bw_stand['gesendet'] : 0) ?></b><span><?php echo bw_t('TEXT.K_GESENDET'); ?></span></div>
   <div class="sm-kachel"><b><?= (int) (isset($bw_stand['fehler']) ? $bw_stand['fehler'] : 0) ?></b><span><?php echo bw_t('TEXT.K_FEHLER'); ?></span></div>
   <div class="sm-kachel"><b><?= bw_im_fenster($bw_cfg) ? bw_t('TEXT.JA') : bw_t('TEXT.NEIN') ?></b><span><?php echo bw_t('TEXT.K_FENSTER'); ?></span></div>
@@ -894,7 +1021,7 @@ foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
         else { echo '<span class="sm-aus">' . bw_e(bw_t('TEXT.FEHLGESCHLAGEN')) . '</span>'; }
       ?></td>
       <td class="sm-mono"><?= (int) $bw_r['code'] ?></td>
-      <td class="sm-mono"><?= bw_e(bw_gekuerzt($bw_r['text'], 120)) ?></td>
+      <td class="sm-mono"><?= bw_e(bw_gekuerzt(isset($bw_r['meldung']) ? $bw_r['meldung'] : $bw_r['text'], 120)) ?></td>
       <td class="sm-mono"><?= bw_e($bw_r['url']) ?></td></tr>
 <?php } ?>
 </table>
@@ -946,6 +1073,72 @@ function bw_zeile(&$liste, $was, $ok, $wie)
     $liste[] = array('was' => $was, 'ok' => (int) $ok, 'wie' => (string) $wie);
 }
 
+/* ---- Pflichtzeilen des Hausstandards (O3, Durchgang 30.09.2026) ---------
+   Bis 0.9.21 stand hier kein Befund, kein Lebenszeichen, kein echter Aufruf
+   des Endpunkts und kein Vergleich der Themenliste mit dem Sendecode - ein
+   seit drei Stunden stehender Takt ergab 0 rote Zeilen, waehrend der
+   Healthcheck derselben Lage Stufe 3 meldete (Pruefbericht Oberflaeche O3). */
+
+/* 1. Der Befund - DIESELBE Funktion wie Healthcheck und Benachrichtigung.
+   Stufe 5 ist ein Haken, 6 (abgeschaltet, Update laeuft) ein Strich, 3 und
+   4 ein Befund. */
+list($bw_bst, $bw_btx) = bw_befund($bw_cfg);
+bw_zeile($bw_selbst, bw_t('TEXT.S_BEFUND'), $bw_bst === 5 ? 1 : ($bw_bst === 6 ? 2 : 0), $bw_btx);
+
+/* 2. Das Lebenszeichen des Takts: wie alt ist der letzte Durchgang? Dieselbe
+   Grenze wie OK am Endpunkt. Vor dem ersten Durchgang gibt es nichts zu
+   beurteilen - ein Strich, kein Kreuz. */
+$bw_lz = bw_lauf_lesen();
+if ((int) $bw_lz['ts'] === 0) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_TAKT'), 2, bw_t('TEXT.S_TAKT_NIE'));
+} else {
+    $bw_lza = time() - (int) $bw_lz['ts'];
+    bw_zeile($bw_selbst, bw_t('TEXT.S_TAKT'), ($bw_lza >= 0 && $bw_lza <= bw_ok_grenze()) ? 1 : 0,
+        sprintf(bw_t('TEXT.S_TAKT_ALTER'), $bw_lza, bw_ok_grenze(), (int) $bw_lz['zaehler']));
+}
+
+/* 3. Der Endpunkt, WIRKLICH aufgerufen ueber 127.0.0.1 - nur wenn der Reiter
+   Test der serverseitig offene ist (Regeln/04): alle Reiter stehen in einem
+   Dokument, und der Aufruf kostet bis zu drei Sekunden. */
+$bw_eptok = trim((string) $bw_cfg['aktionstoken']);
+if ($bw_eptok === '') {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 2, bw_t('TEXT.S_KEIN_TOKEN'));
+} elseif ($bw_tab !== 'tab-test') {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 2, bw_t('TEXT.S_EP_NUR_TEST'));
+} else {
+    $bw_epr = bw_endpunkt_probe($bw_eptok);
+    if ($bw_epr['lage'] === 'gut') {
+        bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 1, bw_t('TEXT.S_EP_GUT'));
+    } elseif ($bw_epr['lage'] === 'falsch') {
+        bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 0,
+            sprintf(bw_t('TEXT.S_EP_FALSCH'), (int) $bw_epr['code'], $bw_epr['anfang']));
+    } else {
+        bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 2, bw_t('TEXT.S_EP_STUMM'));
+    }
+}
+
+/* 4. Die Themenliste gegen den Sendecode, in beide Richtungen. */
+list($bw_thok, $bw_thl, $bw_ths, $bw_thnl, $bw_thns) = bw_mqtt_themen_pruefen($bw_cfg);
+bw_zeile($bw_selbst, bw_t('TEXT.S_THEMEN'), $bw_thok ? 1 : 0,
+    $bw_thok ? sprintf(bw_t('TEXT.S_THEMEN_OK'), $bw_thl, $bw_ths)
+             : trim(($bw_thnl ? bw_t('TEXT.S_THEMEN_NUR_LISTE') . ' ' . implode(', ', $bw_thnl) . ' ' : '')
+                  . ($bw_thns ? bw_t('TEXT.S_THEMEN_NUR_SENDEN') . ' ' . implode(', ', $bw_thns) : '')));
+
+/* 5. Die Vorlagen fuer Loxone Config: wohlgeformt? */
+$bw_vl = bw_vorlagen_pruefen($bw_cfg);
+if ($bw_vl === null) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_VORLAGEN'), 2, bw_t('TEXT.S_VORLAGEN_OHNE'));
+} else {
+    $bw_vlk = array();
+    $bw_vlt = array();
+    foreach ($bw_vl as $bw_vn => $bw_vz) {
+        if ($bw_vz < 0) { $bw_vlk[] = $bw_vn; }
+        $bw_vlt[] = sprintf(bw_t('TEXT.S_VORLAGEN_OK'), $bw_vn, $bw_vz);
+    }
+    bw_zeile($bw_selbst, bw_t('TEXT.S_VORLAGEN'), $bw_vlk ? 0 : 1,
+        $bw_vlk ? bw_t('TEXT.S_VORLAGEN_KAPUTT') . ' ' . implode(', ', $bw_vlk) : implode('; ', $bw_vlt));
+}
+
 /* Gezaehlt wird in DIESER Datei, nicht in einer zweiten Liste daneben. */
 $bw_quelle = (string) @file_get_contents(__FILE__);
 if ($bw_quelle === '') {
@@ -980,11 +1173,27 @@ if ($bw_quelle === '') {
 /* Die Lage der Konfiguration. Jeder Zustand, den der Code erzeugen kann,
    braucht seinen Satz - sonst steht im Reiter Test der rohe Schluessel. */
 $bw_lage = bw_config_lage();
-$bw_lagetext = bw_t('TEXT.LAGE_' . strtoupper($bw_lage['lage']));
-bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'),
-    in_array($bw_lage['lage'], array('ok', 'leer', 'neu'), true) ? 1
-        : ($bw_lage['lage'] === 'aus_zweitschrift' ? 2 : 0),
-    $bw_lagetext);
+/* O4, Durchgang 30.09.2026: gemeldet wird der ERSTE Zustand dieses Aufrufs,
+   nicht der nach der Selbstheilung. Rot, wenn die Datei unlesbar war - auch
+   wenn die Heilung gegriffen hat - und solange eine .kaputt-Datei daneben
+   liegt: dann ist einmal etwas verloren gegangen, und die Zweitschrift kann
+   aelter sein als das Verlorene. */
+$bw_lage1 = bw_config_lage(null, true);
+$bw_kaputtdatei = bw_paths()['cfgdatei'] . '.kaputt';
+if ($bw_lage1['lage'] === 'kaputt') {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'), 0, bw_t('TEXT.LAGE_KAPUTT'));
+} elseif (!empty($bw_lage1['war_kaputt'])) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'), 0,
+        sprintf(bw_t('TEXT.LAGE_KAPUTT_GEHEILT'), basename($bw_kaputtdatei)));
+} elseif (is_file($bw_kaputtdatei)) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'), 0,
+        sprintf(bw_t('TEXT.LAGE_KAPUTT_LIEGT'), basename($bw_kaputtdatei)));
+} else {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'),
+        in_array($bw_lage1['lage'], array('ok', 'leer', 'neu'), true) ? 1
+            : ($bw_lage1['lage'] === 'aus_zweitschrift' ? 2 : 0),
+        bw_t('TEXT.LAGE_' . strtoupper($bw_lage1['lage'])));
+}
 
 /* Vollstaendig heisst: jeder Schluessel der Vorgaben steht wirklich in der
    Datei. Zwei Zahlen, und im Fehlerfall die Namen.
@@ -1018,8 +1227,16 @@ if ($bw_binenv !== false && $bw_binenv !== '') { $bw_bin = $bw_binenv . '/bw_lau
 bw_zeile($bw_selbst, bw_t('TEXT.S_LAUF'), is_file($bw_bin) ? 1 : 0,
     is_file($bw_bin) ? $bw_bin : bw_t('TEXT.S_NICHT_GEFUNDEN'));
 
-bw_zeile($bw_selbst, bw_t('TEXT.S_MS'), $bw_ms ? 1 : 0,
-    $bw_ms ? count($bw_ms) . ' x' : bw_t('TEXT.KEIN_MS'));
+/* Der GEWAEHLTE Miniserver (O2) - nicht die Anzahl. Bis 0.9.21 stand hier
+   "in Ordnung (2 x)", waehrend der eingestellte fehlte. */
+if (!$bw_ms) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_MS'), 0, bw_t('TEXT.KEIN_MS'));
+} elseif ($bw_gewaehlt === null) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_MS'), 0, sprintf(bw_t('TEXT.MS_FEHLT_KURZ'), $bw_ms_nr));
+} else {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_MS'), 1,
+        $bw_gewaehlt['name'] . ' (' . $bw_gewaehlt['adresse'] . ')');
+}
 
 /* Der Cron-Eintrag. Ohne ihn steht das Plugin da und tut nichts, und man
    sieht es an nichts - genau das ist am 24.08.2026 passiert: die 0.9.0 legte
@@ -1135,9 +1352,16 @@ if (!is_file($bw_hc)) {
    Installer raeumt den Ordner bei jedem Upgrade aus. Fehlt sie, ist noch nie
    gespeichert worden - das ist kein Fehler, aber es ist auch kein Haken. */
 $bw_zw = bw_paths()['sicherung'];
-if (is_file($bw_zw)) {
+if (is_file($bw_zw) && bw_zweitschrift_mit_inhalt() !== null) {
     bw_zeile($bw_selbst, bw_t('TEXT.S_ZWEIT'), 1,
         date('Y-m-d H:i', (int) @filemtime($bw_zw)));
+} elseif (is_file($bw_zw)) {
+    /* O14, Durchgang 30.09.2026: vorhanden, aber ohne Kennung und Merkwort
+       (etwa {}) - kein Haken. Rot, wenn die Konfiguration selbst Inhalt
+       traegt: dann sichert die Zweitschrift nichts von dem, was verloren
+       gehen kann; sonst ein Strich. */
+    bw_zeile($bw_selbst, bw_t('TEXT.S_ZWEIT'), bw_hat_inhalt(bw_config(false)) ? 0 : 2,
+        sprintf(bw_t('TEXT.S_ZWEIT_LEER'), date('Y-m-d H:i', (int) @filemtime($bw_zw))));
 } else {
     bw_zeile($bw_selbst, bw_t('TEXT.S_ZWEIT'), 2, bw_t('TEXT.S_ZWEIT_KEINE'));
 }
@@ -1165,6 +1389,10 @@ foreach ($bw_selbst as $bw_z2) { if ($bw_z2['ok'] === 2) { $bw_striche++; } }
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-test">
+  <div class="sm-feld">
+    <label><input data-role="none" type="checkbox" name="rest_bestaetigt" value="1">
+      <?php echo bw_t('TEXT.REST_HAKEN'); ?></label>
+  </div>
   <div class="sm-knopfreihe">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="rest_weg" value="1"><?php echo bw_t('TEXT.REST_WEG'); ?></button>
   </div>
@@ -1216,6 +1444,18 @@ if ($bw_eigen) {
 }
 ?>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_PROTOKOLL_HILFE'); ?></p>
+<?php
+/* Die Fehlerausgabe des Cron-Laufs (C5, Durchgang 30.09.2026). LoxBerry ruft
+   jede Cron-Datei mit "> /dev/null 2>&1" auf; seit 0.9.22 lenkt
+   cron/cron.05min die Fehlerausgabe in cron.err im Protokollordner. Gezeigt
+   wird sie, sobald etwas darin steht - ein Abbruch mit fehlender Bibliothek
+   oder ein Fatal Error ist sonst nirgends zu sehen. */
+$bw_cronerr = bw_paths()['log'] . '/cron.err';
+$bw_cez = bw_log_ende($bw_cronerr, 20);
+if ($bw_cez) { ?>
+<div class="sm-warnung"><?= sprintf(bw_t('TEXT.CRONERR'), bw_e($bw_cronerr)) ?></div>
+<div class="sm-log"><?= bw_e(implode("\n", $bw_cez)) ?></div>
+<?php } ?>
 <div class="sm-warnung"><?php echo bw_t('TEXT.H_PROTOKOLL_RAMDISK'); ?></div>
 </div>
 

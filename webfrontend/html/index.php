@@ -145,6 +145,23 @@ if (!in_array($bw_aktion, $bw_erlaubt, true)) {
             'unbekannte Aktion abgewiesen: ' . substr(preg_replace('/[^\w\-]/', '', $bw_aktion), 0, 20));
 }
 
+/* VOR DEM ERSTEN DURCHGANG HTTP 503 (Regeln/07, "Faellt die Quelle ganz aus,
+   liefert der Endpunkt HTTP 503 ohne Daten" - auch vor dem ersten Abruf). Bis
+   0.9.21 kam hier 200 mit OK=0 und ZAEHLER=-1; in Loxone sah das aus wie ein
+   Messwert. Mit 503 behaelt Loxone die letzten Werte und zeigt den Eingang als
+   gestoert. Gilt fuer status und json; jetzt und pruefen loesen etwas aus und
+   haengen nicht am Takt. Die Zeile ist gebremst: der Miniserver fragt je
+   Minute. */
+if (($bw_aktion === 'status' || $bw_aktion === 'json') && bw_lauf_lesen()['ts'] === 0) {
+    if ($bw_aktion === 'json') {
+        header('Content-Type: application/json; charset=utf-8');
+        bw_ende(503, '{"OK":0,"GRUND":"NIE_GELAUFEN"}',
+                'json: noch kein Durchgang des Takts - 503', 'nie_gelaufen');
+    }
+    bw_ende(503, 'BW;OK=0;GRUND=NIE_GELAUFEN',
+            'status: noch kein Durchgang des Takts - 503', 'nie_gelaufen');
+}
+
 if ($bw_aktion === 'status') {
     bw_ende(200, bw_statuszeile($bw_cfg));
 }
@@ -183,32 +200,23 @@ if ($bw_aktion === 'jetzt') {
         bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'jetzt: ein anderer Lauf ist noch unterwegs');
     }
     $bw_gut = 0;
-    $bw_code_fehler = 0;
-    $bw_code_gut = 0;
+    $bw_ergebnisse = array();
     foreach ($bw_ziele as $bw_z) {
         $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
-        if ($bw_r['ok']) {
-            $bw_gut++;
-            $bw_code_gut = (int) $bw_r['code'];
-            continue;
-        }
-        /* Der Code des ERSTEN Fehlschlags - nicht der des letzten Ziels.
-           Sonst steht im Stand HTTP 200 neben einem erhoehten Fehlerzaehler. */
-        if ($bw_code_fehler === 0) { $bw_code_fehler = (int) $bw_r['code']; }
+        $bw_ergebnisse[] = $bw_r;
+        if ($bw_r['ok']) { $bw_gut++; }
     }
-    $bw_code = ($bw_gut === count($bw_ziele)) ? $bw_code_gut : $bw_code_fehler;
-    $bw_st = bw_stand_lesen();
-    $bw_st['letzte'] = time();
-    if ($bw_gut > 0) { $bw_st['letzte_ok'] = time(); }
-    $bw_st['gesendet'] = (isset($bw_st['gesendet']) ? (int) $bw_st['gesendet'] : 0) + 1;
-    $bw_st['fehler'] = ($bw_gut === count($bw_ziele))
-        ? 0 : ((isset($bw_st['fehler']) ? (int) $bw_st['fehler'] : 0) + 1);
-    $bw_st['code'] = $bw_code;
+    /* Der Stand kommt aus derselben Rechnung wie im Lauf und am Knopf der
+       Oberflaeche (C2, Durchgang 30.09.2026): der Code des ERSTEN
+       Fehlschlags, letzte_ok nur, wenn ALLE Ziele angenommen haben. Bis
+       0.9.21 galt letzte_ok hier schon bei einem Teilerfolg. */
+    $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
+    $bw_code = (int) $bw_st['code'];
     bw_stand_schreiben($bw_st);
     /* takt = false: der Endpunkt sagt etwas ueber den Erfolg DIESES Befehls
        und nichts darueber, ob der Fuenfminutenlauf noch geht. Zeitstempel und
        Zaehler bleiben deshalb stehen - siehe bw_lauf_schreiben(). */
-    bw_lauf_schreiben($bw_gut === count($bw_ziele), false);
+    bw_lauf_schreiben($bw_gut === count($bw_ziele) && !bw_zaehlung_misslungen($bw_cfg, $bw_st), false);
     /* Ein Ausloeser meldet SOFORT, nicht beim naechsten Cron. Ueber HTTP
        holt der Miniserver den Wert beim naechsten Abruf ab; ueber MQTT muss
        ihn das Plugin schicken - sonst sieht ein Test, der erst eine Minute
@@ -249,15 +257,16 @@ if ($bw_aktion === 'pruefen') {
         bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'pruefen: ein anderer Lauf ist noch unterwegs');
     }
     list($bw_ok, $bw_meldung, $bw_erg) = bw_automatiken($bw_cfg);
+    /* Auch der Fehlschlag wird eingetragen (C3, Frage 6/11): die gezaehlten
+       Werte bleiben stehen, OK geht auf 0, bis eine Zaehlung wieder gelingt.
+       Bis 0.9.21 blieb ein Fehlschlag hier ohne jede Spur im Stand. */
+    $bw_st = bw_zaehlung_eintragen(bw_stand_lesen(), $bw_ok, $bw_erg);
+    bw_stand_schreiben($bw_st);
     if (!$bw_ok) {
+        bw_mqtt_publish($bw_cfg, $bw_st);
         bw_ende(502, 'BW;OK=0;ERR=PRUEFEN_MISSLUNGEN',
                 'pruefen misslungen: ' . strip_tags((string) $bw_meldung));
     }
-    $bw_st = bw_stand_lesen();
-    $bw_st['scharf'] = (int) $bw_erg['scharf'];
-    $bw_st['automatiken'] = (int) $bw_erg['gesamt'];
-    $bw_st['scharf_ts'] = time();
-    bw_stand_schreiben($bw_st);
     bw_mqtt_publish($bw_cfg, $bw_st);
     bw_ende(200, bw_statuszeile($bw_cfg, $bw_st),
             'pruefen: ' . $bw_erg['scharf'] . ' von ' . $bw_erg['gesamt'] . ' Automatiken scharf');

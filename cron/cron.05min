@@ -21,7 +21,26 @@
 # Weg, und der Cron lief eine Stunde lang nicht. cron.05min dagegen traegt in
 # dieser Anlage fuenf Plugins, die nachweislich laufen.
 LAUF="REPLACELBPBINDIR/bw_lauf.php"
+#
+# DIE FEHLERAUSGABE GEHT NACH cron.err (C5, Durchgang 30.09.2026; Bauform
+# Docker NG 1.3.7 und Abfahrts-Assistent 1.6.10). LoxBerry ruft jede
+# Cron-Datei mit "> /dev/null 2>&1" auf (am Geraet gelesen in
+# /etc/cron.d/lbdefaults). Bis 0.9.21 schickte diese Zeile auch die eigene
+# Fehlerausgabe dorthin - ein Fatal Error, eine fehlende Bibliothek oder ein
+# unbekannter Schalter verschwanden spurlos, obwohl bw_lauf.php Abbrueche
+# ausdruecklich auf stderr schreibt. Der Platzhalter in der Zeile ERR= wird
+# bei der Installation durch den Protokollordner des Plugins ersetzt.
+# Verzeichnis anlegen, sonst scheitert schon die Umlenkung; touch, weil ein
+# Anhaengen ohne Inhalt die Aenderungszeit nicht auffrischt (Regeln/06); ab
+# 256 kB auf die letzten 300 Zeilen gekappt - log/ liegt im Arbeitsspeicher.
+# Der Reiter Logdateien zeigt die Datei, sobald etwas darin steht.
+ERR="REPLACELBPLOGDIR/cron.err"
 
 [ -f "$LAUF" ] || exit 0
-/usr/bin/php "$LAUF" >/dev/null 2>&1
+mkdir -p "$(dirname "$ERR")" 2>/dev/null
+touch "$ERR" 2>/dev/null
+if [ -f "$ERR" ] && [ "$(wc -c < "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+fi
+/usr/bin/php "$LAUF" >/dev/null 2>>"$ERR"
 exit 0

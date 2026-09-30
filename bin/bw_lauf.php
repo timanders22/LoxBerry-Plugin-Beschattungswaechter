@@ -83,6 +83,11 @@ if ($bw_leeren) {
 }
 
 $c = bw_config();
+/* Die Abodatei des Gateways folgt dem Praefix (M4, Durchgang 30.09.2026). Der
+   Installer legt bei jedem Einbau die mitgelieferte mit dem Vorgabepraefix
+   ab; ein anderes Praefix steht damit erst nach diesem Lauf wieder darin.
+   Geschrieben wird nur, wenn sie abweicht. */
+bw_abo_datei(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '', true);
 $stand = bw_stand_lesen();
 $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
 $alter = $letzte > 0 ? (time() - $letzte) : PHP_INT_MAX;
@@ -157,8 +162,14 @@ if ($grund !== '') {
      * mit der Werkseinstellung 55 von 60 Minuten je Stunde auf 0 und nachts
      * durchgehend - ohne dass irgendetwas war. Wer darauf in Loxone eine
      * Ueberwachung legte, hatte eine Dauerstoerung. */
-    bw_lauf_schreiben(!$bw_stoerung);
+    /* Eine misslungene Zaehlung ist eine Stoerung, bis wieder eine gelingt
+       (C3, Frage 6/11) - OK und status/ok gehen darueber auf 0. */
+    bw_lauf_schreiben(!$bw_stoerung && !bw_zaehlung_misslungen($c, $stand));
+    bw_nach_update_merker_weg();
     bw_mqtt_lebenszeichen($c);
+    /* Die drei Zustaende aktiv, ziele und fenster gehen auch ohne Befehl
+       hinaus, sobald sich einer aendert (M1). */
+    bw_mqtt_zustaende($c);
     bw_melden($c);
     echo "nichts zu tun: " . $grund . "\n";
     exit(0);
@@ -184,8 +195,10 @@ $gut = 0;
 $code_fehler = 0;
 $code_gut = 0;
 $letzter_text = '';
+$ergebnisse = array();
 foreach ($ziele as $z) {
     $r = bw_senden($c, $z['uuid'], $z['befehl']);
+    $ergebnisse[] = $r;
     if ($r['ok']) {
         $gut++;
         $code_gut = (int) $r['code'];
@@ -209,11 +222,9 @@ $alles = ($gut === count($ziele));
 $heute = date('Y-m-d');
 $letzter_tag = isset($stand['tag']) ? (string) $stand['tag'] : '';
 
-$stand['letzte'] = time();
-$stand['letzte_ok'] = $alles ? time() : (isset($stand['letzte_ok']) ? $stand['letzte_ok'] : 0);
-$stand['gesendet'] = (isset($stand['gesendet']) ? (int) $stand['gesendet'] : 0) + 1;
-$stand['fehler'] = $alles ? 0 : ((isset($stand['fehler']) ? (int) $stand['fehler'] : 0) + 1);
-$stand['code'] = $code;
+/* Dieselbe Rechnung wie am Endpunkt und am Knopf der Oberflaeche (C2) - sie
+   ist die, die hier schon stand, herausgezogen nach bw_stand_nach_senden(). */
+$stand = bw_stand_nach_senden($stand, $ergebnisse);
 $stand['tag'] = $heute;
 
 /* Die Wirkung messen, nicht den Rueckgabewert - aber nur, wenn der Anwender
@@ -223,11 +234,11 @@ if (!empty($c['pruefen_ein'])) {
     $letzte_pruefung = isset($stand['scharf_ts']) ? (int) $stand['scharf_ts'] : 0;
     if (time() - $letzte_pruefung >= 900) {
         list($pok, $pmeldung, $perg) = bw_automatiken($c);
-        if ($pok) {
-            $stand['scharf'] = (int) $perg['scharf'];
-            $stand['automatiken'] = (int) $perg['gesamt'];
-            $stand['scharf_ts'] = time();
-        } else {
+        /* Eine Stelle fuer alle drei Wege (C3): gelungen traegt die Werte
+           ein, misslungen vermerkt den Fehlschlag - die Werte bleiben
+           stehen, OK geht auf 0 (Frage 6/11). */
+        $stand = bw_zaehlung_eintragen($stand, $pok, $perg);
+        if (!$pok) {
             bw_log_wenn_neu('pruefen', 'Die Automatiken liessen sich nicht zaehlen: '
                                      . strip_tags((string) $pmeldung));
         }
@@ -238,7 +249,10 @@ if (!empty($c['pruefen_ein'])) {
    Schreibvorgang, nur damit der Tag nachkam - auf einer Speicherkarte ist
    das die doppelte Schreiblast fuer nichts. */
 bw_stand_schreiben($stand);
-bw_lauf_schreiben($alles);
+/* status/ok und OK gehen auch dann auf 0, wenn die eingeschaltete Zaehlung
+   misslungen ist (C3, Frage 6/11). */
+bw_lauf_schreiben($alles && !bw_zaehlung_misslungen($c, $stand));
+bw_nach_update_merker_weg();
 bw_mqtt_publish($c, $stand);
 bw_melden($c);
 

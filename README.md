@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.21
+Version 0.9.22
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -16,6 +16,44 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Misst auf Wunsch die **Wirkung** (`autoActive`) statt nur des Rückgabewerts.
 * Meldet sich beim **Healthcheck** von LoxBerry.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
+
+## Neu in 0.9.22
+
+Durchgang vom 30.09.2026 (Code und MQTT, Oberfläche und Installer). Befunde
+mit Datei:Zeile: `Pruefung-Durchgang-2026-09-29/Beschattungswaechter_BEFUNDE_UND_VERBESSERUNGEN.md`.
+
+**Was in Loxone anders ankommt – bitte ansehen, wenn `fenster` oder `aktiv`
+verdrahtet sind:**
+
+* `aktiv`, `ziele` und `fenster` gehen jetzt nach jeder Änderung und
+  spätestens alle 30 Minuten hinaus – auch nach dem Speichern und außerhalb
+  des Zeitfensters (`fenster` dann 0). Bis 0.9.21 gingen sie nur zusammen mit
+  einem Befehl hinaus; nachts stand `fenster` in Loxone auf dem letzten Wert,
+  und nach „aus“ blieb `aktiv 1` im Broker stehen.
+* `scharf` und `automatiken` ohne Messung: `-` statt `-1`.
+* Der Endpunkt meldet `OK=0`, sobald der letzte Durchgang älter als 15 Minuten
+  ist (neues Feld `LAUFALTER` hinten an der Zeile). `ALTER` zählt weiter die
+  Zeit seit dem letzten Befehl und ist nachts regulär lang – die Baustein-Liste
+  (B1) hängt die Ausfallerkennung jetzt an `LAUFALTER`, nicht an `ALTER`.
+* Vor dem ersten Durchgang antwortet der Endpunkt mit HTTP 503.
+* Die Befehlsvorlage trägt `http://` in der Adresse wie alle anderen Vorlagen.
+
+**Weiter**
+
+* Jedes Absenden endet mit einer Umleitung: F5 würfelt kein neues Merkwort und
+  schickt keinen zweiten Befehl an den Miniserver.
+* Fehlt der eingestellte Miniserver im LoxBerry, sagt die Seite es, und ein
+  Speichern stellt nie still auf Miniserver 1 um.
+* Der Knopf „jetzt“ nimmt dieselbe Sperre wie der Takt und schreibt denselben
+  Stand.
+* Beim Präfixwechsel und beim Abschalten von MQTT räumt das Plugin die alten
+  Themen ab; die Abodatei `mqtt_subscriptions.cfg` führt es selbst.
+* Eine kaputte Konfiguration überschreibt beim Update nicht mehr die heile
+  Zweitschrift. Eine Neuinstallation spielt keine alte Zweitschrift ein
+  (`preinstall.sh`).
+* Die Fehlerausgabe des Takts landet in `cron.err`. Der Healthcheck meldet
+  während eines Updates einen Hinweis statt einer Störung.
+* PHP 8.5: keine Verfallsmeldungen mehr (`$http_response_header`, `curl_close`).
 
 ## Woraus es entstanden ist
 
