@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.24
+Version 0.9.25
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -19,6 +19,26 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.25
+
+Sonne-1 aus der Verbesserungsliste (`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Abschnitt D, Entscheidungen 16 und 19).
+Gemessen mit einer Fensterbilanz- und Broker-Attrappe unter PHP 7.4, 8.3 und 8.5; nicht am Gerät.
+
+* **Sonnenstand aus der Fensterbilanz (ab Werk aus):** Mit dem Haken „Sonnenstand
+  nutzen“ und je Ziel den Fassaden-Ausrichtungen (z. B. `90` oder `90,270`) lässt
+  der Wächter das „A drücken“ für ein Ziel weg, wenn die Fensterbilanz für keine
+  seiner Fassaden Sonne meldet – und holt es nach, sobald Sonne kommt.
+  Voraussetzung: Fensterbilanz ab 0.12.12 mit eingeschaltetem „Sonnenstand für
+  andere Plugins“ (MQTT `haus/sonne/…`).
+* **Quellenausfall:** Fehlt der Satz, ist er älter als 15 Minuten oder kommt aus
+  der Zukunft, oder fehlt die Fassade darin, wird wie bisher gedrückt. Der Reiter
+  Test zeigt die Quelle und je Ziel, was der Takt täte.
+* Ein kleiner Begleitprozess hört die Fensterbilanz mit, erneuert sich mit jedem
+  Takt und endet beim Abschalten (spätestens nach 7 Minuten). Ohne Haken läuft er
+  nicht.
+* `jetzt` (Knopf und Endpunkt) fragt den Sonnenstand nicht. Ältere Sicherungen
+  bleiben zurückspielbar.
 
 ## Neu in 0.9.24
 
@@ -184,9 +204,10 @@ gelb am Knopf, und die Sicherung trägt den Kopf `_warnung` mit den Namen – ni
 den Werten. Geliefert wird sie trotzdem, für diese Einstellung mit der Vorgabe,
 mit der das Plugin gerade arbeitet.
 
-Eine Sicherung aus einer Fassung ohne die Wetter-Einstellungen wird angenommen;
-für `wetter_ein`, `wetter_token`, `sonne_min` und `wind_max` gilt dann die
-Vorgabe (Wetter aus), und die Meldung sagt es. Jeder andere fehlende Schlüssel
+Eine Sicherung aus einer Fassung ohne die Wetter-Einstellungen oder ohne den
+Sonnenstand wird angenommen; für `wetter_ein`, `wetter_token`, `sonne_min`,
+`wind_max`, `sonne_ein` und `fassade` … `fassade6` gilt dann die Vorgabe (Wetter
+und Sonnenstand aus), und die Meldung sagt es. Jeder andere fehlende Schlüssel
 bleibt eine Beanstandung.
 
 **Beim Speichern im Reiter *Einstellungen* oder *MQTT*** gilt: wird ein Feld
@@ -372,6 +393,63 @@ dafür selbst, sonst zeigt die Zeile den letzten Abruf des Takts.
 *Befehl jetzt senden*, `aktion=jetzt` und `bw_lauf.php --jetzt` fragen kein
 Wetter: wer den Befehl schickt, meint ihn – wie bei Zeitfenster und Abstand.
 `bw_lauf.php --probe` nennt die Wetterentscheidung mit.
+
+## Sonnenstand aus der Fensterbilanz (ab Werk aus)
+
+Die Fensterbilanz rechnet den Sonnenstand ohnehin. Eingeschaltet (Reiter
+*Einstellungen*, Abschnitt *Sonnenstand der Fensterbilanz*, Haken
+*Sonnenstand der Fensterbilanz nutzen*) lässt der Fünfminutentakt das A bei
+einem Ziel **weg**, solange die Fensterbilanz für **jede** diesem Ziel
+zugeordnete Fassade meldet, dass gerade keine direkte Sonne auf ihre Fenster
+fällt. Ohne Sonne holt das A nur Automatiken zurück, die jemand bewusst
+abgeschaltet hat. Ein Weglassen ist **keine Störung** – `OK` bleibt 1.
+
+**Die Zuordnung:** je Ziel (1 bis 6) die Ausrichtung der Fassade in ganzen
+Grad, so wie die Fensterbilanz sie nennt – `90`, mehrere als `90,180` (ohne
+Leerzeichen, ohne führende Null, höchstens acht). Für den Zentralbaustein
+alle Fassaden eintragen: er wird nur weggelassen, wenn auf keine Sonne fällt.
+Ein Ziel ohne Eintrag wird gedrückt wie bisher. Eine andere Schreibweise wird
+beanstandet (nichts gespeichert, Eingaben kommen zurück).
+
+**Die Quelle** sind die MQTT-Themen der Fensterbilanz am Broker dieses
+LoxBerry – nie ihre Dateien. Dort im Reiter *MQTT* „Sonnenstand für andere
+Plugins (Sonne-1)“ einschalten (ab Fensterbilanz 0.12.12, ab Werk aus):
+
+| Thema | gelesen als |
+|---|---|
+| `haus/sonne/azimut`, `haus/sonne/elevation` | Sonnenstand in Grad (nur Anzeige) |
+| `haus/sonne/fassaden` | Liste der Fassaden (`90,150,210` oder `-`) |
+| `haus/sonne/fassade/<Grad>/wirkt` | `1` Sonne auf mindestens einem Fenster, `0` keine |
+| `haus/sonne/ts` | Zeitpunkt der Rechnung, letztes Thema des Satzes |
+
+Die Themen sind flüchtig (nicht retained). Deshalb hört ein kleiner
+Begleitprozess mit (`bw_lauf.php --sonne-hoeren`), den der Takt alle fünf
+Minuten neu startet; der vorige endet dabei, spätestens nach sieben Minuten –
+steht der Takt, bleibt kein Prozess stehen. Er meldet sich mit `Brokeruser`/
+`Brokerpass` aus der LoxBerry-Konfiguration an (das Kennwort steht auf keiner
+Kommandozeile) und legt nur `data/plugins/beschattungswaechter/sonne.json` ab.
+Mit ausgeschaltetem Haken startet nichts, und der Takt verhält sich wie
+bisher.
+
+**Nachholen:** Ein weggelassenes Ziel prüft jeder folgende Takt im Zeitfenster
+erneut und drückt es, sobald Sonne darauf fällt (oder die Quelle schweigt).
+Der Abstand der übrigen Ziele zählt weiter ab dem regulären Befehl.
+
+**Fällt die Quelle aus** – kein Satz, der letzte Satz älter als **15 Minuten**
+(dreimal der Takt der Fensterbilanz; zwei verlorene Sätze in Folge sollen
+nicht sofort zurückfallen, und in 15 Minuten wandert die Sonne nur rund 4°),
+ein Satz aus der Zukunft, die Fassade fehlt im Satz, die Fensterbilanz ist
+nicht installiert oder der Broker weist die Anmeldung ab –, gilt das
+**bisherige Verhalten**: das A wird gedrückt. Nie wird aufgrund alter Daten
+still weggelassen. Das Protokoll sagt es höchstens einmal je Stunde; der Reiter
+Test zeigt in der Zeile *Sonnenstand der Fensterbilanz* den letzten Satz und
+in der Zeile darunter je Ziel, was der Takt jetzt täte.
+
+*Befehl jetzt senden*, `aktion=jetzt` und `bw_lauf.php --jetzt` fragen den
+Sonnenstand nicht – wer den Befehl schickt, meint ihn. `bw_lauf.php --probe`
+nennt die Entscheidung mit und startet nichts. Ins Protokoll kommen zusätzlich
+das Weglassen (je Zielmenge höchstens stündlich), der Rückfall auf das
+bisherige Verhalten (höchstens stündlich) und jedes Nachholen.
 
 ## Das Protokoll
 

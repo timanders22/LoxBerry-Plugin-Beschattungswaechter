@@ -170,10 +170,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     }
 
     $bw_felderliste = array('uuid', 'befehl', 'von', 'bis', 'abstand',
-                            'wetter_token', 'sonne_min', 'wind_max');
+                            'wetter_token', 'sonne_min', 'wind_max', 'fassade');
     for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
         $bw_felderliste[] = 'uuid' . $bw_i;
         $bw_felderliste[] = 'befehl' . $bw_i;
+        /* Sonne-1: die Fassaden der Ziele 2..6 (Ziel 1: 'fassade'). */
+        $bw_felderliste[] = 'fassade' . $bw_i;
     }
     foreach ($bw_felderliste as $bw_f) {
         $bw_w = isset($_POST[$bw_f]) ? $_POST[$bw_f] : '';
@@ -185,7 +187,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
                Sprachschluessel je Zeile. */
             $bw_grund = preg_replace('/[0-9]+$/', '', $bw_f);
             $bw_bez = bw_t('TEXT.L_' . strtoupper($bw_grund));
-            if ($bw_grund === 'uuid' || $bw_grund === 'befehl') {
+            if ($bw_grund === 'uuid' || $bw_grund === 'befehl' || $bw_grund === 'fassade') {
                 $bw_nr = substr($bw_f, strlen($bw_grund));
                 $bw_bez .= ' (' . bw_t('TEXT.ZIEL') . ' ' . ($bw_nr !== '' ? $bw_nr : '1') . ')';
             }
@@ -200,6 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     }
     $bw_neu['pruefen_ein'] = empty($_POST['pruefen_ein']) ? 0 : 1;
     $bw_neu['wetter_ein'] = empty($_POST['wetter_ein']) ? 0 : 1;
+    $bw_neu['sonne_ein'] = empty($_POST['sonne_ein']) ? 0 : 1;
     /* EINE HALB AUSGEFUELLTE ZEILE WIRD GENANNT, NICHT UEBERGANGEN.
        Seit 0.9.13 darf der Befehl eines weiteren Ziels leer sein - so raeumt
        man es aus. Steht dann aber noch eine Kennung da, wird diese Zeile
@@ -224,6 +227,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
            naechsten Befehl - bis 0.9.21 stand nach dem Abschalten ueber MQTT
            weiter aktiv 1 im Broker. */
         bw_mqtt_zustaende($bw_cfg, true);
+        /* Sonne-1: ausgeschaltet - der Begleitprozess endet binnen einer
+           Sekunde, nicht erst mit seiner Hoechstdauer. */
+        if (empty($bw_cfg['sonne_ein'])) {
+            bw_sonne_hoerer_abmelden();
+        }
     } else {
         $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
     }
@@ -827,6 +835,30 @@ if ($bw_ms_fehlt) { ?>
   </div>
 </div>
 <p class="sm-hilfe"><?= sprintf(bw_t('TEXT.H_WETTER_FELDER'), (int) round(bw_wetter_frist() / 60)) ?></p>
+
+<!-- Sonne-1 (Verbesserungsbau 01.10.2026): der Sonnenstand der Fensterbilanz
+     ueber MQTT (haus/sonne/), ab Werk aus. Je Ziel die Fassaden, deren
+     Sonne es braucht; leer = wie bisher. -->
+<h3><?php echo bw_t('TEXT.H_SONNE'); ?></h3>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_SONNE_ERKL'); ?></p>
+<div class="sm-feld">
+  <label<?= bw_markiert($bw_eg, 'sonne_ein', false) ?>><input data-role="none" type="checkbox" name="sonne_ein" value="1"<?= bw_ungueltig($bw_eg, 'sonne_ein') ?><?= bw_formhaken($bw_eg, 'sonne_ein', $bw_cfg['sonne_ein']) ? ' checked' : '' ?>>
+    <?php echo bw_t('TEXT.L_SONNE_EIN'); ?></label>
+</div>
+<div class="sm-breit">
+<table class="sm-tbl">
+  <tr><th>#</th><th><?php echo bw_t('TEXT.L_UUID'); ?></th><th><?php echo bw_t('TEXT.L_FASSADE'); ?></th></tr>
+<?php for ($bw_i = 1; $bw_i <= 6; $bw_i++) {
+    $bw_kf = ($bw_i === 1) ? 'fassade' : 'fassade' . $bw_i;
+    $bw_ku = ($bw_i === 1) ? 'uuid' : 'uuid' . $bw_i;
+    $bw_zu = isset($bw_cfg[$bw_ku]) ? trim((string) $bw_cfg[$bw_ku]) : ''; ?>
+  <tr><td><?= (int) $bw_i ?></td>
+      <td class="sm-mono"><?= $bw_zu !== '' ? bw_e($bw_zu) : '&ndash;' ?></td>
+      <td><input data-role="none" type="text" name="<?= $bw_kf ?>" value="<?= bw_e(bw_formwert($bw_eg, $bw_kf, isset($bw_cfg[$bw_kf]) ? $bw_cfg[$bw_kf] : '')) ?>" placeholder="<?= bw_e(bw_t('TEXT.P_FASSADE')) ?>"<?= bw_markiert($bw_eg, $bw_kf) ?>></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= sprintf(bw_t('TEXT.H_SONNE_FELDER'), (int) round(bw_sonne_frist() / 60)) ?></p>
 
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
@@ -1475,6 +1507,15 @@ if (empty($bw_cfg['wetter_ein'])) {
                         (int) round(bw_wetter_frist() / 60)));
         }
     }
+}
+
+/* Der Sonnenstand der Fensterbilanz (Sonne-1, ab Werk aus). Gelesen wird der
+   Satz, den das Mithoeren des Takts zuletzt abgelegt hat - dieselbe Rechnung
+   wie der Takt (bw_sonne_bewerten(), bw_sonne_ziele()). Ein Kreuz, wenn kein
+   frischer Satz da ist: dann drueckt der Takt wie bisher, und genau das steht
+   dabei. Die zweite Zeile sagt je Ziel, was der Takt jetzt taete. */
+foreach (bw_sonne_pruefzeilen($bw_cfg) as $bw_sz) {
+    bw_zeile($bw_selbst, $bw_sz[0], $bw_sz[1], $bw_sz[2]);
 }
 
 /* Der Healthcheck. LoxBerry ruft ihn nur auf, wenn die Datei im bin-Ordner

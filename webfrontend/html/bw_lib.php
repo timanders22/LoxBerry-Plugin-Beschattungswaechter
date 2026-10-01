@@ -269,6 +269,18 @@ function bw_vorgaben()
         'wetter_token' => '',
         'sonne_min'    => 120,
         'wind_max'     => 0,
+        /* Sonne-1 (Verbesserungsbau 01.10.2026), AB WERK AUS: der
+           Sonnenstand der Fensterbilanz (MQTT haus/sonne/) - siehe
+           Abschnitt J. fassade/fassadeN ordnen Ziel 1..6 eine oder mehrere
+           Fassaden (Ausrichtung in ganzen Grad, wie die Fensterbilanz sie
+           nennt) zu; leer heisst: dieses Ziel wird gedrueckt wie bisher. */
+        'sonne_ein'    => 0,
+        'fassade'      => '',
+        'fassade2'     => '',
+        'fassade3'     => '',
+        'fassade4'     => '',
+        'fassade5'     => '',
+        'fassade6'     => '',
     );
 }
 
@@ -280,7 +292,9 @@ function bw_vorgaben()
  */
 function bw_sicherung_spaeter()
 {
-    return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max');
+    /* Sonne-1 (01.10.2026): dazu der Haken und die Zuordnung der Fassaden. */
+    return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max',
+                 'sonne_ein', 'fassade', 'fassade2', 'fassade3', 'fassade4', 'fassade5', 'fassade6');
 }
 
 /** Die Kennungen und Befehle aller eingerichteten Ziele, in ihrer Reihenfolge. */
@@ -347,11 +361,13 @@ function bw_wert_pruefen($schluessel, $wert)
        Ziel 1 bleibt streng: es ist das Ziel, das es immer gibt. */
     if (preg_match('/^uuid[2-6]$/', $schluessel)) { $schluessel = 'uuid'; }
     if (preg_match('/^befehl[2-6]$/', $schluessel)) { $schluessel = 'befehl_weiteres'; }
+    if (preg_match('/^fassade[2-6]$/', $schluessel)) { $schluessel = 'fassade'; }
     switch ($schluessel) {
         case 'aktiv':
         case 'mqtt_ein':
         case 'pruefen_ein':
         case 'wetter_ein':
+        case 'sonne_ein':
             return $s === '0' || $s === '1';
         case 'ms':
             return preg_match('/^[0-9]{1,3}$/', $s) === 1;
@@ -410,6 +426,17 @@ function bw_wert_pruefen($schluessel, $wert)
         case 'wind_max':
             /* m/s, 0 = Wind nicht pruefen. */
             return preg_match('/^[0-9]{1,2}$/', $s) === 1 && (int) $s <= 60;
+        case 'fassade':
+            /* Sonne-1: leer = keine Zuordnung; sonst bis acht Ausrichtungen in
+               ganzen Grad 0-359, durch Komma getrennt, ohne Leerzeichen und
+               ohne fuehrende Null - genau die Schreibweise der Themen der
+               Fensterbilanz (haus/sonne/fassade/<az>/wirkt). "90, 180" oder
+               "090" wird beanstandet, nicht still berichtigt (Entscheidung 19). */
+            if (!is_string($wert) && !is_int($wert)) {
+                return false;
+            }
+            return $s === '' || preg_match('/^(0|[1-9][0-9]?|[12][0-9]{2}|3[0-5][0-9])'
+                . '(,(0|[1-9][0-9]?|[12][0-9]{2}|3[0-5][0-9])){0,7}\z/', $s) === 1;
     }
     return false;
 }
@@ -3739,8 +3766,10 @@ function bw_eingabe_felder($form)
     $felder = array(
         'settings' => array(
             'text'   => array_merge(array('ms_nr', 'uuid', 'befehl'), $ziele,
-                                    array('von', 'bis', 'abstand', 'sonne_min', 'wind_max')),
-            'haken'  => array('aktiv', 'pruefen_ein', 'wetter_ein'),
+                                    array('von', 'bis', 'abstand', 'sonne_min', 'wind_max'),
+                                    array('fassade', 'fassade2', 'fassade3', 'fassade4',
+                                          'fassade5', 'fassade6')),
+            'haken'  => array('aktiv', 'pruefen_ein', 'wetter_ein', 'sonne_ein'),
             'geheim' => array('wetter_token'),
         ),
         'mqtt' => array(
@@ -4250,4 +4279,775 @@ function bw_wetter_entscheiden(array $c, $schreiben = true, $jetzt = null)
         }
     }
     return $e;
+}
+
+/* ==================================================================
+ * J. SONNENSTAND AUS DER FENSTERBILANZ (Sonne-1, Verbesserungsbau
+ *    01.10.2026, Teil Beschattungswaechter)
+ * ==================================================================
+ *
+ * AB WERK AUS (sonne_ein). Eingeschaltet laesst der TAKT das A bei einem
+ * Ziel weg, solange die Fensterbilanz fuer JEDE diesem Ziel zugeordnete
+ * Fassade sagt, dass gerade keine direkte Sonne auf ihre Fenster faellt.
+ * Ohne Sonne holt der Befehl nur Automatiken zurueck, die jemand bewusst
+ * abgeschaltet hat, und bewirkt sonst nichts (Fensterbilanz-c1,
+ * Beschattung-c1). Ein Ziel ohne Zuordnung wird gedrueckt wie bisher.
+ *
+ * DIE QUELLE: die MQTT-Themen der Fensterbilanz unter haus/sonne/, nie ihre
+ * Dateien. Belegt in LoxBerry-Plugin-Beschattung_Fensterbilanz-0.12.13
+ * (veroeffentlicht 0.12.12), fb_lib.php: fb_sonne_stamm() "haus/sonne",
+ * fb_sonne_nachrichten() (Namen, Werte, Reihenfolge: azimut, elevation,
+ * fassaden, fassade/<az>/wirkt, ts ZULETZT), fb_sonne_fassaden() (Regel
+ * "wirkt": Geometrie, keine Wolken), gesendet in fb_mqtt_senden() mit
+ * "publish" ueber den UDP-Eingang des Gateways - also FLUECHTIG, in jedem
+ * Rechenlauf (Cron alle 5 min, dazu bei Messwerten hoechstens im Rechentakt).
+ * <az> ist die Ausrichtung in ganzen Grad 0-359 ohne fuehrende Null.
+ *
+ * WEIL NICHTS RETAINED IST, hoert ein kleiner Begleitprozess mit
+ * (bw_lauf.php --sonne-hoeren <kennung>). Der Takt startet ihn alle fuenf
+ * Minuten neu und traegt dessen Kennung in data/sonne_hoerer.json ein; der
+ * vorige endet, sobald dort eine andere Kennung steht (Pruefung jede
+ * Sekunde), spaetestens nach bw_sonne_hoerer_dauer() - steht der Takt, steht
+ * nach sieben Minuten auch kein Begleitprozess mehr. Er schreibt nur
+ * data/sonne.json. Anmeldung am Broker wie bw_mqtt_behalten_liste():
+ * Brokeruser/Brokerpass aus general.json, das Kennwort steht nur im
+ * CONNECT-Paket, nie auf einer Kommandozeile oder in einer Datei des Plugins.
+ *
+ * FAELLT DIE QUELLE AUS - kein Satz, Satz aelter als bw_sonne_frist() oder
+ * aus der Zukunft, die Fassade fehlt im Satz -, gilt fuer das Ziel das
+ * bisherige Verhalten: das A wird gedrueckt, das Protokoll sagt es hoechstens
+ * stuendlich, der Reiter Test zeigt es. Nie wird aufgrund alter Daten still
+ * unterdrueckt.
+ *
+ * NACHHOLEN: ein weggelassenes Ziel prueft jeder folgende Takt im
+ * Zeitfenster erneut und drueckt es, sobald Sonne darauf faellt oder die
+ * Quelle schweigt. Der Abstand der uebrigen Ziele zaehlt dabei weiter ab dem
+ * regulaeren Befehl (bw_sonne_takt_stand()).
+ *
+ * "jetzt" (Endpunkt, Knopf, --jetzt) fragt den Sonnenstand nicht - wer den
+ * Befehl schickt, meint ihn, wie bei Wetter, Zeitfenster und Abstand.
+ * ================================================================== */
+
+/**
+ * Wie alt ein Satz hoechstens sein darf (Sekunden): 900 = dreimal der
+ * Fuenfminutentakt der Fensterbilanz (ihr BAUBERICHT nennt dieselbe Grenze;
+ * Entscheidung 4 rechnet ebenso). Ein Satz kommt mindestens alle 5 min; der
+ * UDP-Eingang verliert unter Last Datagramme (Regeln/07, 12,6 % an dieser
+ * Anlage), zwei verlorene Saetze in Folge sollen nicht sofort auf das
+ * bisherige Verhalten fallen. In 15 min wandert die Sonne rund 4 Grad im
+ * Azimut; ein "keine Sonne" kann also nur an der Kante einer Fassade
+ * veraltet sein - und dort holt der naechste frische Satz das A im
+ * naechsten Takt nach.
+ */
+function bw_sonne_frist()
+{
+    return 900;
+}
+
+/** Wie weit ein Satz aus der Zukunft stammen darf (Uhrsprung) - 5 s wie Fensterbilanz a1. */
+function bw_sonne_zukunft()
+{
+    return 5;
+}
+
+/** Hoechste Lebensdauer eines Begleitprozesses (s): ein Takt (300) plus zwei Minuten Verzug. */
+function bw_sonne_hoerer_dauer()
+{
+    return 420;
+}
+
+/** Der Themenstamm der Fensterbilanz (fb_sonne_stamm()). */
+function bw_sonne_stamm()
+{
+    return 'haus/sonne';
+}
+
+function bw_sonne_pfad()
+{
+    return bw_paths()['datadir'] . '/sonne.json';
+}
+
+function bw_sonne_hoerer_pfad()
+{
+    return bw_paths()['datadir'] . '/sonne_hoerer.json';
+}
+
+/** Der gemerkte Stand des Begleitprozesses: satz, hoerer. */
+function bw_sonne_lesen()
+{
+    $d = json_decode((string) @file_get_contents(bw_sonne_pfad()), true);
+    return is_array($d) ? $d : array();
+}
+
+/** Die zugeordneten Fassaden eines Ziels (ganze Grad) - leer heisst: keine Zuordnung. */
+function bw_sonne_fassaden_von(array $c, $nr)
+{
+    $k = ((int) $nr === 1) ? 'fassade' : 'fassade' . (int) $nr;
+    $s = isset($c[$k]) && (is_string($c[$k]) || is_int($c[$k])) ? trim((string) $c[$k]) : '';
+    if ($s === '' || !bw_wert_pruefen('fassade', $s)) {
+        return array();
+    }
+    return array_values(array_unique(array_map('intval', explode(',', $s))));
+}
+
+/**
+ * Den gemerkten Satz bewerten - EINE Rechnung fuer Takt und Reiter Test.
+ * lage: frisch | veraltet | zukunft | nie. Nur ein frischer Satz traegt
+ * Werte; sonst ist wirkt leer, und jedes zugeordnete Ziel faellt auf das
+ * bisherige Verhalten.
+ */
+function bw_sonne_bewerten(array $d, $jetzt)
+{
+    $e = array('lage' => 'nie', 'alter' => -1, 'ts' => 0, 'azimut' => null, 'elevation' => null,
+               'fassaden' => null, 'wirkt' => array());
+    $satz = (isset($d['satz']) && is_array($d['satz'])) ? $d['satz'] : null;
+    if ($satz === null || !isset($satz['ts']) || !is_int($satz['ts']) || $satz['ts'] <= 0) {
+        return $e;
+    }
+    $e['ts'] = $satz['ts'];
+    $e['alter'] = (int) $jetzt - $satz['ts'];
+    if ($e['alter'] < -bw_sonne_zukunft()) {
+        $e['lage'] = 'zukunft';
+        return $e;
+    }
+    if ($e['alter'] > bw_sonne_frist()) {
+        $e['lage'] = 'veraltet';
+        return $e;
+    }
+    $e['lage'] = 'frisch';
+    foreach (array('azimut', 'elevation') as $k) {
+        if (isset($satz[$k]) && (is_int($satz[$k]) || is_float($satz[$k]))) {
+            $e[$k] = (float) $satz[$k];
+        }
+    }
+    if (isset($satz['fassaden']) && is_array($satz['fassaden'])) {
+        $e['fassaden'] = array();
+        foreach ($satz['fassaden'] as $az) {
+            if (is_int($az) && $az >= 0 && $az <= 359) {
+                $e['fassaden'][] = $az;
+            }
+        }
+    }
+    if (isset($satz['wirkt']) && is_array($satz['wirkt'])) {
+        foreach ($satz['wirkt'] as $az => $w) {
+            if (is_int($az) && $az >= 0 && $az <= 359 && ($w === 0 || $w === 1)) {
+                $e['wirkt'][$az] = $w;
+            }
+        }
+    }
+    return $e;
+}
+
+/**
+ * Je Ziel ein Urteil: frei (keine Zuordnung - wie bisher), sonne (Sonne auf
+ * mindestens einer zugeordneten Fassade), ohne_sonne (JEDE zugeordnete
+ * Fassade sagt im frischen Satz 0 - das A wird weggelassen), keine_aussage
+ * (kein frischer Satz oder eine Fassade fehlt darin - bisheriges Verhalten).
+ */
+function bw_sonne_ziele(array $c, array $ziele, array $e)
+{
+    $aus = array();
+    foreach ($ziele as $z) {
+        $fa = bw_sonne_fassaden_von($c, $z['nr']);
+        $u = array('nr' => (int) $z['nr'], 'uuid' => $z['uuid'], 'befehl' => $z['befehl'],
+                   'fassaden' => $fa, 'urteil' => 'frei', 'fehlt' => array());
+        if ($fa) {
+            if ($e['lage'] !== 'frisch') {
+                $u['urteil'] = 'keine_aussage';
+            } else {
+                $sonne = false;
+                foreach ($fa as $az) {
+                    if (!isset($e['wirkt'][$az])) {
+                        $u['fehlt'][] = $az;
+                    } elseif ($e['wirkt'][$az] === 1) {
+                        $sonne = true;
+                    }
+                }
+                $u['urteil'] = $sonne ? 'sonne' : ($u['fehlt'] ? 'keine_aussage' : 'ohne_sonne');
+            }
+        }
+        $aus[] = $u;
+    }
+    return $aus;
+}
+
+/** Die Lage des Satzes als deutscher Halbsatz fuer Protokoll und Ausgabe des Laufs. */
+function bw_sonne_lage_satz(array $e)
+{
+    if ($e['lage'] === 'frisch') {
+        return 'Satz der Fensterbilanz ' . max(0, (int) $e['alter']) . ' s alt';
+    }
+    if ($e['lage'] === 'veraltet') {
+        return 'letzter Satz der Fensterbilanz ' . (int) $e['alter'] . ' s alt (Grenze ' . bw_sonne_frist() . ' s)';
+    }
+    if ($e['lage'] === 'zukunft') {
+        return 'letzter Satz der Fensterbilanz ' . (-(int) $e['alter']) . ' s in der Zukunft';
+    }
+    return 'kein Satz der Fensterbilanz empfangen';
+}
+
+/**
+ * Die Sonnenbedingung des Takts fuer die faelligen Ziele.
+ * Rueckgabe: frei (Ziele, die gedrueckt werden, Form wie bw_ziele()), weg
+ * (Nummern ohne Sonne), ohne (Nummern ohne Aussage, gedrueckt), bewertung,
+ * urteile. $schreiben = false (Probe): nichts protokollieren.
+ */
+function bw_sonne_entscheiden(array $c, array $ziele, $schreiben = true, $jetzt = null)
+{
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $e = bw_sonne_bewerten(bw_sonne_lesen(), $jetzt);
+    $urteile = bw_sonne_ziele($c, $ziele, $e);
+    $s = array('frei' => array(), 'weg' => array(), 'ohne' => array(), 'bewertung' => $e, 'urteile' => $urteile);
+    foreach ($urteile as $u) {
+        if ($u['urteil'] === 'ohne_sonne') {
+            $s['weg'][] = $u['nr'];
+            continue;
+        }
+        $s['frei'][] = array('nr' => $u['nr'], 'uuid' => $u['uuid'], 'befehl' => $u['befehl']);
+        if ($u['urteil'] === 'keine_aussage') {
+            $s['ohne'][] = $u['nr'];
+        }
+    }
+    if ($schreiben) {
+        /* Hoechstens einmal je Stunde und Menge: ein Takt, der alle fuenf
+           Minuten dasselbe weglaesst, schriebe sonst zwoelf Zeilen je Stunde. */
+        if ($s['weg']) {
+            bw_log_wenn_neu('sonne_weg_' . implode('_', $s['weg']),
+                'Sonne-1: ' . bw_sonne_protokollsatz(array('weg' => $s['weg'], 'ohne' => array(), 'bewertung' => $e)));
+        }
+        if ($s['ohne']) {
+            /* Je Lage und Zielmenge: ein Wechsel (kein Satz -> veraltet) steht sofort da. */
+            bw_log_wenn_neu('sonne_ohne_' . $e['lage'] . '_' . implode('_', $s['ohne']),
+                'Sonne-1: ' . bw_sonne_protokollsatz(array('weg' => array(), 'ohne' => $s['ohne'], 'bewertung' => $e)));
+        }
+    }
+    return $s;
+}
+
+/** Die Entscheidung als deutscher Satz fuer Protokoll und Ausgabe des Laufs. */
+function bw_sonne_protokollsatz(array $s)
+{
+    $e = $s['bewertung'];
+    $teile = array();
+    if ($s['weg']) {
+        $teile[] = 'keine Sonne auf den Fassaden von Ziel ' . implode(', ', $s['weg'])
+                 . ' (' . bw_sonne_lage_satz($e) . ') - das A wird dort weggelassen';
+    }
+    if ($s['ohne']) {
+        $teile[] = 'keine frische Aussage fuer Ziel ' . implode(', ', $s['ohne'])
+                 . ' (' . bw_sonne_lage_satz($e) . ') - bisheriges Verhalten, das A wird gedrueckt';
+    }
+    if (!$teile) {
+        $teile[] = 'Sonne erlaubt den Befehl (' . bw_sonne_lage_satz($e) . ')';
+    }
+    return implode('; ', $teile);
+}
+
+/**
+ * Der Sonnen-Stand des Takts in stand.json - nur, wenn der LETZTE Befehl
+ * (stand.letzte) ein Befehl des Takts mit Sonnenbedingung war. Jeder andere
+ * Befehl (jetzt, Endpunkt, Knopf, Takt ohne Haken) setzt letzte neu, und
+ * dann gilt dieser Stand nicht mehr. Rueckgabe null oder
+ * array('regel' => Zeitpunkt des regulaeren Befehls, 'offen' => weggelassene Ziele).
+ */
+function bw_sonne_takt_stand(array $stand)
+{
+    $s = (isset($stand['sonne']) && is_array($stand['sonne'])) ? $stand['sonne'] : null;
+    if ($s === null || !isset($s['letzte'], $s['regel'], $stand['letzte'])
+        || (int) $s['letzte'] !== (int) $stand['letzte']
+        || (int) $s['regel'] <= 0 || (int) $s['regel'] > (int) $s['letzte']) {
+        return null;
+    }
+    $offen = array();
+    foreach ((isset($s['offen']) && is_array($s['offen'])) ? $s['offen'] : array() as $n) {
+        if (is_int($n) && $n >= 1 && $n <= 6 && !in_array($n, $offen, true)) {
+            $offen[] = $n;
+        }
+    }
+    return array('regel' => (int) $s['regel'], 'offen' => $offen);
+}
+
+/** Die noch offenen (weggelassenen) Ziele, die es noch gibt - in der Reihenfolge von $ziele. */
+function bw_sonne_offene_ziele(array $stand, array $ziele)
+{
+    $s = bw_sonne_takt_stand($stand);
+    if ($s === null || !$s['offen']) {
+        return array();
+    }
+    $aus = array();
+    foreach ($ziele as $z) {
+        if (in_array((int) $z['nr'], $s['offen'], true)) {
+            $aus[] = $z;
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Nach einem Befehl des Takts eintragen, was weggelassen wurde und ab wann
+ * der Abstand zaehlt: bei einem nachgeholten Befehl bleibt der Zeitpunkt des
+ * regulaeren stehen. Laeuft NACH bw_stand_nach_senden().
+ */
+function bw_sonne_stand_eintragen(array $stand, array $sonne, $vorher, $nachholen)
+{
+    $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : time();
+    $regel = ($nachholen && is_array($vorher)) ? (int) $vorher['regel'] : $letzte;
+    $stand['sonne'] = array('letzte' => $letzte, 'regel' => $regel,
+                            'offen' => array_values(array_map('intval', $sonne['weg'])));
+    return $stand;
+}
+
+/** Steht diese Kennung (noch) in data/sonne_hoerer.json? */
+function bw_sonne_hoerer_gilt($id)
+{
+    $d = json_decode((string) @file_get_contents(bw_sonne_hoerer_pfad()), true);
+    return is_array($d) && isset($d['id']) && is_string($d['id']) && $d['id'] === (string) $id;
+}
+
+/**
+ * Den Begleitprozess neu starten - aus dem Takt (bin/bw_lauf.php), nicht bei
+ * --probe und --jetzt. Erst die neue Kennung eintragen (der vorige endet
+ * daran), dann starten. KEIN proc_close(): das wartete auf das Ende; der
+ * Prozess laeuft nach dem Takt weiter und endet von selbst. Seine Ein- und
+ * Ausgaben gehen nach /dev/null, Fehler nach cron.err - eine offene Leitung
+ * des Takts haelt er nie. Gestartet wird VOR jeder Sperre des Takts
+ * (Memory "Sperre vererbt sich an Kinder").
+ */
+function bw_sonne_hoerer_starten($skript)
+{
+    $p = bw_paths();
+    try {
+        $id = bin2hex(random_bytes(8));
+    } catch (\Throwable $t) {
+        $id = substr(md5(uniqid((string) mt_rand(), true)), 0, 16);
+    }
+    if (!bw_json_schreiben(bw_sonne_hoerer_pfad(), array('id' => $id, 'start' => time()), 0644)) {
+        bw_log_wenn_neu('sonne_start',
+            'Sonne-1: data/sonne_hoerer.json liess sich nicht schreiben - das Mithoeren wurde nicht '
+            . 'gestartet; sobald der letzte Satz aelter als ' . (int) round(bw_sonne_frist() / 60)
+            . ' Minuten ist, gilt das bisherige Verhalten.');
+        return false;
+    }
+    $null = (DIRECTORY_SEPARATOR === '/') ? '/dev/null' : 'NUL';
+    $err = (is_dir($p['log']) && is_writable($p['log'])) ? array('file', $p['log'] . '/cron.err', 'a')
+                                                           : array('file', $null, 'w');
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '') ? PHP_BINARY : 'php';
+    $rohre = array();
+    $proc = @proc_open(array($php, (string) $skript, '--sonne-hoeren', $id),
+                       array(0 => array('file', $null, 'r'), 1 => array('file', $null, 'w'), 2 => $err),
+                       $rohre);
+    if (!is_resource($proc)) {
+        bw_log_wenn_neu('sonne_start',
+            'Sonne-1: das Mithoeren (bw_lauf.php --sonne-hoeren) liess sich nicht starten; sobald der letzte '
+            . 'Satz aelter als ' . (int) round(bw_sonne_frist() / 60) . ' Minuten ist, gilt das bisherige Verhalten.');
+        return false;
+    }
+    return true;
+}
+
+/** Ausgeschaltet: die Kennung austragen - der laufende Begleitprozess endet daran binnen einer Sekunde. */
+function bw_sonne_hoerer_abmelden()
+{
+    $f = bw_sonne_hoerer_pfad();
+    if (is_file($f)) {
+        @unlink($f);
+        bw_log('Sonne-1: ausgeschaltet - das Mithoeren am Broker endet.');
+    }
+}
+
+/** Die Zugangsdaten des Brokers aus general.json - wie bw_mqtt_behalten_liste(); null ohne Eintrag. */
+function bw_sonne_broker()
+{
+    $p = bw_paths();
+    if ($p['lbhome'] === '') {
+        return null;
+    }
+    $d = @json_decode((string) @file_get_contents($p['lbhome'] . '/config/system/general.json'), true);
+    if (!is_array($d) || !isset($d['Mqtt']) || !is_array($d['Mqtt'])) {
+        return null;
+    }
+    $m = $d['Mqtt'];
+    $hol = function ($k) use ($m) {
+        return (isset($m[$k]) && is_scalar($m[$k])) ? (string) $m[$k] : '';
+    };
+    $host = trim($hol('Brokerhost'));
+    if ($host === '' || $host === 'localhost') {
+        $host = '127.0.0.1';
+    }
+    $port = (int) $hol('Brokerport');
+    if ($port <= 0 || $port > 65535) {
+        $port = 1883;
+    }
+    return array('host' => $host, 'port' => $port, 'user' => $hol('Brokeruser'), 'pass' => $hol('Brokerpass'));
+}
+
+/**
+ * Aus den seit dem letzten ts empfangenen Themen einen Satz bauen. Es zaehlt
+ * nur, was hoechstens 10 s vor dem ts kam: die Fensterbilanz sendet einen
+ * Satz in einem Zug (5 ms je Thema). Was aelter ist, stammt aus einem Satz,
+ * dessen ts verloren ging - es gilt nicht, sonst trueg ein alter Wert den
+ * neuen Zeitstempel. null, wenn der ts selbst unbrauchbar ist.
+ */
+function bw_sonne_satz_bauen(array $offen, $ts_roh, $jetzt_mikro)
+{
+    $ts_roh = trim((string) $ts_roh);
+    if (preg_match('/^[0-9]{1,12}\z/', $ts_roh) !== 1 || (int) $ts_roh <= 0) {
+        return null;
+    }
+    $satz = array('ts' => (int) $ts_roh, 'empfangen' => (int) floor($jetzt_mikro), 'azimut' => null,
+                  'elevation' => null, 'fassaden' => null, 'wirkt' => array());
+    $stamm = bw_sonne_stamm() . '/';
+    foreach ($offen as $t => $e) {
+        if ($jetzt_mikro - $e[1] > 10.0) {
+            continue;
+        }
+        $w = trim((string) $e[0]);
+        $rest = (string) substr((string) $t, strlen($stamm));
+        if ($rest === 'azimut' || $rest === 'elevation') {
+            if (preg_match('/^-?[0-9]{1,3}(\.[0-9]+)?\z/', $w) === 1) {
+                $satz[$rest] = (float) $w;
+            }
+        } elseif ($rest === 'fassaden') {
+            if ($w === '-') {
+                $satz['fassaden'] = array();
+            } elseif (preg_match('/^[0-9]{1,3}(,[0-9]{1,3}){0,63}\z/', $w) === 1) {
+                $satz['fassaden'] = array_map('intval', explode(',', $w));
+            }
+        } elseif (preg_match('#^fassade/(0|[1-9][0-9]{0,2})/wirkt\z#', $rest, $m) === 1
+                  && (int) $m[1] <= 359 && ($w === '0' || $w === '1')) {
+            $satz['wirkt'][(int) $m[1]] = (int) $w;
+        }
+    }
+    return $satz;
+}
+
+/** Den Stand des Begleitprozesses ablegen - nur, solange seine Kennung gilt. */
+function bw_sonne_merken($id, array $hoerer, $satz = null)
+{
+    if (!bw_sonne_hoerer_gilt($id)) {
+        return false;
+    }
+    $d = bw_sonne_lesen();
+    $d['hoerer'] = $hoerer;
+    if ($satz !== null) {
+        $d['satz'] = $satz;
+    }
+    return bw_json_schreiben(bw_sonne_pfad(), $d, 0644);
+}
+
+/**
+ * Der Begleitprozess (bw_lauf.php --sonne-hoeren <kennung>): am Broker
+ * haus/sonne/# abonnieren (QoS 0) und jeden vollstaendigen Satz ablegen.
+ * MQTT 3.1.1 von Hand wie bw_mqtt_behalten_liste(), ohne fremde Bibliothek.
+ * Endet, sobald die Kennung nicht mehr gilt, der Haken aus ist (Pruefung
+ * jede Minute), die Verbindung reisst oder $dauer um ist.
+ * Rueckgabe: 0 regulaer beendet, 1 Broker nicht zu erreichen/abgewiesen/
+ * getrennt, 2 Kennung ungueltig.
+ */
+function bw_sonne_hoeren($id, $dauer = null)
+{
+    $dauer = ($dauer === null) ? bw_sonne_hoerer_dauer() : max(1, (int) $dauer);
+    $id = (string) $id;
+    if (preg_match('/^[0-9a-f]{16}\z/', $id) !== 1 || !bw_sonne_hoerer_gilt($id)) {
+        return 2;
+    }
+    $start = time();
+    $z = array('id' => $id, 'pid' => getmypid(), 'start' => $start, 'verbunden' => 0, 'grund' => '',
+               'code' => 0, 'nachrichten' => 0, 'saetze' => 0, 'ende' => 0);
+    $b = bw_sonne_broker();
+    if ($b === null) {
+        $z['grund'] = 'KEIN_BROKER';
+        $z['ende'] = time();
+        bw_sonne_merken($id, $z);
+        bw_log_wenn_neu('sonne_hoerer_broker',
+            'Sonne-1: in der general.json steht kein MQTT-Broker - der Sonnenstand der Fensterbilanz ist nicht '
+            . 'zu lesen; es gilt das bisherige Verhalten.');
+        return 1;
+    }
+    $eno = 0;
+    $etxt = '';
+    $s = @stream_socket_client('tcp://' . $b['host'] . ':' . $b['port'], $eno, $etxt, 3);
+    if (!$s) {
+        $z['grund'] = 'STUMM';
+        $z['ende'] = time();
+        bw_sonne_merken($id, $z);
+        bw_log_wenn_neu('sonne_hoerer_stumm',
+            'Sonne-1: der MQTT-Broker ' . $b['host'] . ':' . $b['port'] . ' antwortet nicht (' . $etxt
+            . ') - es gilt das bisherige Verhalten, sobald der letzte Satz aelter als '
+            . (int) round(bw_sonne_frist() / 60) . ' Minuten ist.');
+        return 1;
+    }
+    stream_set_timeout($s, 5);
+    $zk = function ($t) {
+        return pack('n', strlen($t)) . $t;
+    };
+    $laenge = function ($n) {
+        $o = '';
+        do {
+            $by = $n % 128;
+            $n = intdiv($n, 128);
+            if ($n > 0) {
+                $by |= 128;
+            }
+            $o .= chr($by);
+        } while ($n > 0);
+        return $o;
+    };
+    $lies = function ($n) use ($s) {
+        $d = '';
+        while (strlen($d) < $n) {
+            $t = @fread($s, $n - strlen($d));
+            if ($t === false || $t === '') {
+                $meta = stream_get_meta_data($s);
+                if (!empty($meta['timed_out']) || !empty($meta['eof']) || feof($s)) {
+                    return null;
+                }
+                continue;
+            }
+            $d .= $t;
+        }
+        return $d;
+    };
+    $paket = function () use ($lies) {
+        $k = $lies(1);
+        if ($k === null) {
+            return null;
+        }
+        $n = 0;
+        $mult = 1;
+        for ($i = 0; $i < 4; $i++) {
+            $by = $lies(1);
+            if ($by === null) {
+                return null;
+            }
+            $n += (ord($by) & 127) * $mult;
+            $mult *= 128;
+            if (!(ord($by) & 128)) {
+                break;
+            }
+        }
+        $r = ($n > 0) ? $lies($n) : '';
+        return ($r === null) ? null : array(ord($k), $r);
+    };
+    $flags = 0x02;
+    $nutz = $zk('bwsonne' . getmypid());
+    if ($b['user'] !== '') {
+        $flags |= 0x80;
+        if ($b['pass'] !== '') {
+            $flags |= 0x40;
+        }
+    }
+    $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 60);
+    if ($b['user'] !== '') {
+        $nutz .= $zk($b['user']);
+        if ($b['pass'] !== '') {
+            $nutz .= $zk($b['pass']);
+        }
+    }
+    $ack = null;
+    if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+        $ack = $paket();
+    }
+    if ($ack === null || ($ack[0] >> 4) !== 2 || strlen($ack[1]) < 2 || ord($ack[1][1]) !== 0) {
+        $z['grund'] = 'ANMELDUNG';
+        $z['code'] = ($ack !== null && strlen($ack[1]) >= 2) ? ord($ack[1][1]) : 0;
+        $z['ende'] = time();
+        fclose($s);
+        bw_sonne_merken($id, $z);
+        bw_log_wenn_neu('sonne_hoerer_anmeldung',
+            'Sonne-1: der MQTT-Broker hat die Anmeldung abgewiesen (CONNACK ' . (int) $z['code']
+            . ') - Brokeruser/Brokerpass in der general.json pruefen; es gilt das bisherige Verhalten.');
+        return 1;
+    }
+    $filter = bw_sonne_stamm() . '/#';
+    $sub = pack('n', 1) . $zk($filter) . chr(0);
+    @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
+    $suback = null;
+    $bis = microtime(true) + 5.0;
+    while ($suback === null && microtime(true) < $bis) {
+        $pk = $paket();
+        if ($pk === null) {
+            break;
+        }
+        if (($pk[0] >> 4) === 9) {
+            $suback = (string) substr($pk[1], 2);
+        }
+    }
+    if ($suback === null || strlen($suback) !== 1 || ord($suback[0]) >= 0x80) {
+        $z['grund'] = 'ABGELEHNT';
+        $z['ende'] = time();
+        @fwrite($s, chr(0xE0) . chr(0));
+        fclose($s);
+        bw_sonne_merken($id, $z);
+        bw_log_wenn_neu('sonne_hoerer_abo',
+            'Sonne-1: der MQTT-Broker hat das Abo ' . $filter . ' abgelehnt - es gilt das bisherige Verhalten.');
+        return 1;
+    }
+    $z['verbunden'] = time();
+    bw_sonne_merken($id, $z);
+    $offen = array();
+    $ping = time();
+    $id_pruef = 0;
+    $cfg_pruef = time();
+    $stamm = bw_sonne_stamm() . '/';
+    while (time() - $start < $dauer) {
+        if (time() - $id_pruef >= 1) {
+            $id_pruef = time();
+            if (!bw_sonne_hoerer_gilt($id)) {
+                break;
+            }
+        }
+        if (time() - $cfg_pruef >= 60) {
+            $cfg_pruef = time();
+            $cc = bw_config(false);
+            if (empty($cc['sonne_ein'])) {
+                break;
+            }
+        }
+        if (time() - $ping >= 30) {
+            $ping = time();
+            if (@fwrite($s, chr(0xC0) . chr(0)) === false) {
+                $z['grund'] = 'GETRENNT';
+                break;
+            }
+        }
+        $r = array($s);
+        $w = null;
+        $x = null;
+        $n = @stream_select($r, $w, $x, 1);
+        if ($n === false) {
+            $z['grund'] = 'GETRENNT';
+            break;
+        }
+        if ($n === 0) {
+            continue;
+        }
+        $pk = $paket();
+        if ($pk === null) {
+            $z['grund'] = 'GETRENNT';
+            break;
+        }
+        if (($pk[0] >> 4) !== 3 || strlen($pk[1]) < 2) {
+            continue;
+        }
+        $tl = unpack('n', substr($pk[1], 0, 2));
+        $t = (string) substr($pk[1], 2, $tl[1]);
+        $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+        $wert = (string) substr($pk[1], $versatz);
+        if (strncmp($t, $stamm, strlen($stamm)) !== 0 || strlen($wert) > 512) {
+            continue;
+        }
+        $z['nachrichten']++;
+        if ($t === $stamm . 'ts') {
+            $satz = bw_sonne_satz_bauen($offen, $wert, microtime(true));
+            $offen = array();
+            if ($satz !== null) {
+                $z['saetze']++;
+                bw_sonne_merken($id, $z, $satz);
+            } else {
+                bw_log_wenn_neu('sonne_form', 'Sonne-1: ein Satz der Fensterbilanz trug keinen brauchbaren '
+                    . 'Zeitstempel (' . bw_kurz($wert) . ') und wurde verworfen.');
+            }
+        } elseif (count($offen) < 400) {
+            $offen[$t] = array($wert, microtime(true));
+        }
+    }
+    @fwrite($s, chr(0xE0) . chr(0));
+    fclose($s);
+    $z['ende'] = time();
+    if ($z['grund'] === 'GETRENNT') {
+        bw_log_wenn_neu('sonne_hoerer_getrennt',
+            'Sonne-1: die Verbindung zum MQTT-Broker riss ab - der naechste Takt hoert neu mit.');
+    }
+    bw_sonne_merken($id, $z);
+    return $z['grund'] === '' ? 0 : 1;
+}
+
+/** Eine Gradzahl fuer die Oberflaeche - eine Nachkommastelle, Punkt. */
+function bw_sonne_zahl($z)
+{
+    return $z === null ? '-' : number_format((float) $z, 1, '.', '');
+}
+
+/**
+ * Die Zeilen im Reiter Test (Klartext, uebersetzt): array(array(titel,
+ * 0|1|2, text), ...). Dieselbe Rechnung wie der Takt. Ein Kreuz, wenn kein
+ * frischer Satz da ist - dann drueckt der Takt wie bisher, und das steht
+ * dabei; ein Strich, solange noch nichts zu erwarten war.
+ */
+function bw_sonne_pruefzeilen(array $c, $jetzt = null)
+{
+    $titel = bw_t('TEXT.S_SONNE');
+    if (empty($c['sonne_ein'])) {
+        return array(array($titel, 2, bw_t('TEXT.S_SONNE_AUS')));
+    }
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $d = bw_sonne_lesen();
+    $e = bw_sonne_bewerten($d, $jetzt);
+    $h = (isset($d['hoerer']) && is_array($d['hoerer'])) ? $d['hoerer'] : array();
+    $hg = (isset($h['grund']) && is_string($h['grund'])) ? $h['grund'] : '';
+    $htext = '';
+    if (in_array($hg, array('KEIN_BROKER', 'STUMM', 'ANMELDUNG', 'ABGELEHNT', 'GETRENNT'), true)) {
+        $htext = sprintf(bw_t('TEXT.SONNE_H_' . $hg), isset($h['code']) ? (int) $h['code'] : 0);
+    }
+    $zeilen = array();
+    if ($e['lage'] === 'frisch') {
+        $fa = array();
+        foreach ($e['wirkt'] as $az => $w) {
+            $fa[] = $az . ' ' . bw_t($w === 1 ? 'TEXT.SONNE_JA' : 'TEXT.SONNE_NEIN');
+        }
+        $zeilen[] = array($titel, 1, sprintf(bw_t('TEXT.S_SONNE_GUT'), bw_zeitpunkt($e['ts']),
+            max(0, (int) $e['alter']), bw_sonne_zahl($e['azimut']), bw_sonne_zahl($e['elevation']),
+            $fa ? implode(', ', $fa) : '-'));
+    } elseif ($e['lage'] === 'nie') {
+        $verbunden = isset($h['verbunden']) ? (int) $h['verbunden'] : 0;
+        if ($htext !== '') {
+            $zeilen[] = array($titel, 0, sprintf(bw_t('TEXT.S_SONNE_HOERER'), $htext));
+        } elseif ($verbunden > 0 && $jetzt - $verbunden > 360) {
+            $zeilen[] = array($titel, 0, sprintf(bw_t('TEXT.S_SONNE_STILL'), bw_zeitpunkt($verbunden)));
+        } elseif ($verbunden > 0) {
+            $zeilen[] = array($titel, 2, sprintf(bw_t('TEXT.S_SONNE_WARTET'), bw_zeitpunkt($verbunden)));
+        } else {
+            $zeilen[] = array($titel, 2, bw_t('TEXT.S_SONNE_NIE'));
+        }
+    } else {
+        $zeilen[] = array($titel, 0, sprintf(bw_t($e['lage'] === 'zukunft' ? 'TEXT.S_SONNE_ZUKUNFT' : 'TEXT.S_SONNE_ALT'),
+            bw_zeitpunkt($e['ts']), abs((int) $e['alter']), (int) round(bw_sonne_frist() / 60))
+            . ($htext !== '' ? ' - ' . $htext : ''));
+    }
+    $zt = bw_t('TEXT.S_SONNE_ZIELE');
+    $ziele = bw_ziele($c);
+    if (!$ziele) {
+        $zeilen[] = array($zt, 2, bw_t('TEXT.SONNE_KEIN_ZIEL'));
+        return $zeilen;
+    }
+    $teile = array();
+    $zugeordnet = 0;
+    $fremd = array();
+    foreach (bw_sonne_ziele($c, $ziele, $e) as $u) {
+        if (!$u['fassaden']) {
+            $teile[] = sprintf(bw_t('TEXT.SONNE_Z_FREI'), $u['nr']);
+            continue;
+        }
+        $zugeordnet++;
+        $teile[] = sprintf(bw_t('TEXT.SONNE_Z_' . strtoupper($u['urteil'])), $u['nr'], implode(',', $u['fassaden']));
+        if ($e['fassaden'] !== null) {
+            foreach ($u['fassaden'] as $az) {
+                if (!in_array($az, $e['fassaden'], true) && !in_array($az, $fremd, true)) {
+                    $fremd[] = $az;
+                }
+            }
+        }
+    }
+    if ($zugeordnet === 0) {
+        $zeilen[] = array($zt, 2, bw_t('TEXT.SONNE_KEINE_ZUORDNUNG'));
+        return $zeilen;
+    }
+    $text = implode(' | ', $teile);
+    if ($fremd) {
+        sort($fremd);
+        $text = sprintf(bw_t('TEXT.SONNE_FREMD'), implode(', ', $fremd)) . ' ' . $text;
+    }
+    $zeilen[] = array($zt, $fremd ? 0 : 1, $text);
+    return $zeilen;
 }

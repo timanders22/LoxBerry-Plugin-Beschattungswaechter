@@ -24,6 +24,11 @@
  *   php bw_lauf.php --mqtt-leeren
  *                              leert die zurueckbehaltenen MQTT-Themen
  *                              (aus uninstall/uninstall)
+ *   php bw_lauf.php --sonne-hoeren <kennung>
+ *                              der Begleitprozess von Sonne-1 - startet der
+ *                              Takt selbst (bw_sonne_hoerer_starten()), nur
+ *                              mit dem Haken "Sonnenstand der Fensterbilanz
+ *                              nutzen"; nicht von Hand aufrufen
  */
 
 /* Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
@@ -55,7 +60,7 @@ require_once $bw_lib;
    Antwort ergeben und keinen Lauf - bei einem Werkzeug, das etwas an eine
    fremde Anlage schickt, ist das nicht Kosmetik. */
 $bw_argv = isset($argv) ? $argv : array();
-$bw_bekannt = array('--jetzt', '--probe', '--mqtt-leeren');
+$bw_bekannt = array('--jetzt', '--probe', '--mqtt-leeren', '--sonne-hoeren');
 foreach ($bw_argv as $bw_i => $bw_a) {
     if ($bw_i === 0 || strncmp((string) $bw_a, '--', 2) !== 0) {
         continue;
@@ -69,6 +74,7 @@ foreach ($bw_argv as $bw_i => $bw_a) {
 $bw_jetzt = in_array('--jetzt', $bw_argv, true);
 $bw_probe = in_array('--probe', $bw_argv, true);
 $bw_leeren = in_array('--mqtt-leeren', $bw_argv, true);
+$bw_hoeren = in_array('--sonne-hoeren', $bw_argv, true);
 
 /* Ohne Wurzel oder aus einem Archiv heraus: nichts senden, nichts schreiben.
    Bis 0.9.19 lief der Lauf auch dann - aus einem Archiv unter der Wurzel
@@ -80,6 +86,20 @@ bw_keine_wurzel_abbruch('bw_lauf.php');
 if ($bw_leeren) {
     /* Aufgerufen aus uninstall/uninstall. */
     exit(bw_mqtt_leeren());
+}
+
+if ($bw_hoeren) {
+    /* Sonne-1: der Begleitprozess des Takts (bw_sonne_hoerer_starten(),
+       Abschnitt J in bw_lib.php). Die Kennung ist das erste Argument ohne
+       "--"; ohne gueltige Kennung endet er sofort. */
+    $bw_hid = '';
+    foreach ($bw_argv as $bw_i => $bw_a) {
+        if ($bw_i > 0 && strncmp((string) $bw_a, '--', 2) !== 0) {
+            $bw_hid = (string) $bw_a;
+            break;
+        }
+    }
+    exit(bw_sonne_hoeren($bw_hid));
 }
 
 $c = bw_config();
@@ -115,6 +135,17 @@ $wartezeit = ($bw_fehlerstand > 0)
  * 65, aus dem kleinsten Abstand (5) wurden 10, also das Doppelte. */
 $bw_toleranz = 150;
 
+/* SONNE-1 (Verbesserungsbau 01.10.2026), AB WERK AUS: war der letzte Befehl
+   ein nachgeholter (ein Ziel, das der Takt ohne Sonne weggelassen hatte),
+   zaehlt der Abstand weiter ab dem regulaeren Befehl davor - sonst schoebe
+   jedes Nachholen den naechsten Druck aller uebrigen Ziele hinaus. Jeder
+   andere Befehl (jetzt, Endpunkt, Knopf) macht diesen Stand ungueltig
+   (bw_sonne_takt_stand()). Ohne Haken aendert sich nichts. */
+$bw_sonne_vorher = !empty($c['sonne_ein']) ? bw_sonne_takt_stand($stand) : null;
+if ($bw_sonne_vorher !== null) {
+    $alter = max(0, time() - $bw_sonne_vorher['regel']);
+}
+
 $grund = '';
 /* Nicht jeder Grund, nichts zu tun, ist eine Stoerung: abgeschaltet und
    ausserhalb des Zeitfensters sind der bestimmungsgemaesse Betrieb. Nur ein
@@ -131,6 +162,42 @@ if (!$ziele) {
 } elseif ($alter + $bw_toleranz < $wartezeit && !$bw_jetzt) {
     $grund = sprintf('erst %d von %d Minuten seit dem letzten Befehl',
                      (int) floor($alter / 60), (int) round($wartezeit / 60));
+}
+
+/* SONNENSTAND DER FENSTERBILANZ (Sonne-1, Verbesserungsbau 01.10.2026), AB
+   WERK AUS - Abschnitt J in bw_lib.php. Nie bei --jetzt: wer den Befehl
+   schickt, meint ihn. Der Takt startet zuerst das Mithoeren neu (nicht die
+   Probe; vor jeder Sperre). Dann:
+   - Nachholen: fehlte sonst NUR der Abstand (eingeschaltet, im Fenster, ein
+     Ziel eingerichtet) und hat der Takt zuletzt Ziele ohne Sonne
+     weggelassen, gelten jetzt nur diese Ziele als faellig.
+   - Je faelliges Ziel: fallen auf JEDE zugeordnete Fassade laut frischem
+     Satz keine Sonne, wird es weggelassen (Protokollzeile). Ohne frische
+     Aussage wird gedrueckt wie bisher (Protokollzeile). Bleibt keines
+     uebrig, ist das wie beim Wetter keine Stoerung (OK bleibt 1).
+   Das Wetter fragt danach nur, wenn noch etwas zu druecken ist. */
+$bw_sonne = null;
+$bw_nachholen = false;
+if (!empty($c['sonne_ein']) && !$bw_jetzt) {
+    if (!$bw_probe) {
+        bw_sonne_hoerer_starten(__FILE__);
+    }
+    if ($grund !== '' && $ziele && !empty($c['aktiv']) && bw_im_fenster($c)) {
+        $bw_offen = bw_sonne_offene_ziele($stand, $ziele);
+        if ($bw_offen) {
+            $bw_nachholen = true;
+            $ziele = $bw_offen;
+            $grund = '';
+        }
+    }
+    if ($grund === '') {
+        $bw_sonne = bw_sonne_entscheiden($c, $ziele, !$bw_probe);
+        if (!$bw_sonne['frei']) {
+            $grund = 'Sonne: ' . bw_sonne_protokollsatz($bw_sonne);
+        } else {
+            $ziele = $bw_sonne['frei'];
+        }
+    }
 }
 
 /* WETTER AUS DER ECOWITT-WEICHE (Wetter-1, Verbesserungsbau 30.09.2026), AB
@@ -156,6 +223,10 @@ if ($bw_probe) {
     echo 'PROBE - es wird nichts gesendet.' . "\n";
     if ($bw_wetter !== null) {
         echo '  Wetter (Ecowitt-Weiche): ' . bw_wetter_protokollsatz($bw_wetter) . "\n";
+    }
+    if ($bw_sonne !== null) {
+        echo '  Sonne (Fensterbilanz' . ($bw_nachholen ? ', Nachholen' : '') . '): '
+           . bw_sonne_protokollsatz($bw_sonne) . "\n";
     }
     if ($grund !== '') {
         echo '  Ein regulaerer Lauf taete jetzt nichts: ' . $grund . "\n";
@@ -260,6 +331,10 @@ $stand = bw_stand_nach_senden($stand, $ergebnisse);
 $stand['tag'] = $heute;
 /* b1: die Nachmessung beginnt; der naechste Takt vergleicht. */
 $stand = bw_wirkung_beginnen($stand, $bw_vorher, $ergebnisse);
+/* Sonne-1: was der Takt weggelassen hat, und ab wann der Abstand zaehlt. */
+if ($bw_sonne !== null) {
+    $stand = bw_sonne_stand_eintragen($stand, $bw_sonne, $bw_sonne_vorher, $bw_nachholen);
+}
 
 /* Die Wirkung messen, nicht den Rueckgabewert - aber nur, wenn der Anwender
    es eingeschaltet hat, und hoechstens einmal je Viertelstunde: die Messung
@@ -298,6 +373,17 @@ if ($alles && $letzter_tag !== $heute) {
                    count($ziele), $code));
 }
 
+/* Sonne-1: ein nachgeholtes A steht immer im Protokoll - es kommt hoechstens
+   einmal je Ziel und Abstand vor. */
+if ($bw_nachholen) {
+    $bw_nrs = array();
+    foreach ($ziele as $z) { $bw_nrs[] = (int) $z['nr']; }
+    bw_log(sprintf('Sonne-1: A fuer Ziel %s nachgeholt (jetzt Sonne oder keine frische Aussage): '
+                   . '%d von %d angenommen, HTTP %d', implode(', ', $bw_nrs), $gut, count($ziele), $code));
+}
+if ($bw_sonne !== null && ($bw_sonne['weg'] || $bw_sonne['ohne'])) {
+    echo 'Sonne-1: ' . bw_sonne_protokollsatz($bw_sonne) . "\n";
+}
 echo ($alles ? 'gesendet' : 'FEHLER') . ': ' . $gut . ' von ' . count($ziele)
    . ' Ziel(en), HTTP ' . $code . ' ' . substr($letzter_text, 0, 100) . "\n";
 exit($alles ? 0 : 1);
