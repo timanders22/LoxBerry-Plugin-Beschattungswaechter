@@ -3835,11 +3835,34 @@ function bw_formhaken($eg, $name, $gespeichert)
     return !empty($gespeichert);
 }
 
-/** Das Attribut fuer ein beanstandetes Feld - rot umrandet - oder nichts. */
-function bw_markiert($eg, $name)
+/** Ist dieses Feld nach einer Beanstandung markiert? */
+function bw_ist_markiert($eg, $name)
 {
-    return (is_array($eg) && isset($eg['markiert']) && in_array($name, $eg['markiert'], true))
-        ? ' class="sm-beanstandet"' : '';
+    return is_array($eg) && isset($eg['markiert']) && is_array($eg['markiert'])
+        && in_array($name, $eg['markiert'], true);
+}
+
+/**
+ * Die Merkmale eines beanstandeten Feldes - oder nichts.
+ *
+ * Rot umrandet (sm-beanstandet) UND fuer Bildschirmleser als ungueltig
+ * gekennzeichnet (aria-invalid, B-Nachzug 01.10.2026, wie APC-UPS 1.2.16).
+ * Bis 0.9.24 sah nur, wer die Farbe sah, welches Feld gemeint war.
+ * $am_feld = false fuer ein <label> um einen Haken: dort nur der Rahmen;
+ * aria-invalid gehoert an das Eingabeelement selbst (bw_ungueltig()).
+ */
+function bw_markiert($eg, $name, $am_feld = true)
+{
+    if (!bw_ist_markiert($eg, $name)) {
+        return '';
+    }
+    return ' class="sm-beanstandet"' . ($am_feld ? ' aria-invalid="true"' : '');
+}
+
+/** Nur aria-invalid - fuer das <input> eines Hakens, dessen <label> den Rahmen traegt. */
+function bw_ungueltig($eg, $name)
+{
+    return bw_ist_markiert($eg, $name) ? ' aria-invalid="true"' : '';
 }
 
 /**

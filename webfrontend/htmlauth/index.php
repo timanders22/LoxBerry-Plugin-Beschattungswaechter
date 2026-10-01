@@ -149,15 +149,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
     /* Der Miniserver wird ueber seinen SCHLUESSEL gespeichert, nicht ueber
        seine Stellung - siehe bw_vorgaben(). Die Stellung wird mitgefuehrt,
        damit eine aeltere Fassung des Plugins die Datei weiter lesen kann. */
+    $bw_wahl_roh = isset($_POST['ms_nr']) ? $_POST['ms_nr'] : '';
     $bw_wahl = bw_eingabe($_POST, 'ms_nr');
-    if (bw_wert_pruefen('ms_nr', $bw_wahl)) {
+    /* NICHTS WIRD STILL UMGEDEUTET (Entscheidung 19, B-Nachzug 01.10.2026).
+       Bis 0.9.24 wurde ein Feld statt Text (ms_nr[]=1) zu '', und ein
+       leerer Schluessel wurde gespeichert, obwohl LoxBerry Miniserver kennt -
+       danach galt still die Stellung statt des Schluessels. Das Formular
+       bietet '' nur an, wenn es keinen Miniserver gibt. */
+    $bw_wahl_gilt = is_string($bw_wahl_roh) && bw_wert_pruefen('ms_nr', $bw_wahl)
+        && !($bw_wahl === '' && bw_miniserver());
+    if ($bw_wahl_gilt) {
         $bw_neu['ms_nr'] = $bw_wahl;
         foreach (bw_miniserver() as $bw_i => $bw_m) {
             if ($bw_m['nr'] === $bw_wahl) { $bw_neu['ms'] = $bw_i; break; }
         }
-    } elseif ($bw_wahl !== '') {
-        $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
-                               bw_e(bw_t('TEXT.L_MS')), bw_e(bw_kurz($bw_wahl)));
+    } else {
+        $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'), bw_e(bw_t('TEXT.L_MS')),
+            bw_e(($bw_wahl === '' && is_string($bw_wahl_roh)) ? bw_t('TEXT.KURZ_LEER') : bw_kurz($bw_wahl_roh)));
         $bw_beanstandet[] = 'ms_nr';
     }
 
@@ -229,22 +237,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
     $bw_neu = $bw_cfg;
     $bw_neu['mqtt_ein'] = empty($_POST['mqtt_ein']) ? 0 : 1;
+    $bw_th_roh = isset($_POST['mqtt_thema']) ? $_POST['mqtt_thema'] : '';
     $bw_th = bw_eingabe($_POST, 'mqtt_thema');
-    /* LEER HEISST VORGABE (O8, Durchgang 30.09.2026). Beschriftung und Hilfe
-       sagten bis 0.9.21 "leer lassen genuegt" und nannten den Rechnernamen -
-       der Handler wies das leere Feld aber ab. Jetzt wird die Vorgabe
-       eingetragen, und die Meldung sagt es. Ein Thema aus Leerzeichen ist
-       nicht leer und geht wie bisher durch die Pruefung. */
-    if ($bw_th === '') {
-        $bw_th = bw_vorgaben()['mqtt_thema'];
-        $bw_meldungen[] = sprintf(bw_t('MQTT.PRAEFIX_VORGABE'), bw_e($bw_th));
-    }
+    /* LEER IST EINE BEANSTANDUNG, KEINE VORGABE (Entscheidung 19, B-Nachzug
+       01.10.2026). Von 0.9.22 (O8) bis 0.9.24 trug der Handler fuer ein
+       leeres Feld - auch eines aus Leerzeichen oder ein Feld statt Text -
+       still die Vorgabe ein und speicherte, samt Haken. Jetzt wird nichts
+       gespeichert, das Feld ist markiert, und die Meldung nennt die Vorgabe
+       zum Eintippen. Still bleibt nur der Leerraum am Rand. */
     $bw_mq_beanstandet = array();
-    if (bw_wert_pruefen('mqtt_thema', $bw_th)) {
+    if (is_string($bw_th_roh) && $bw_th === '') {
+        $bw_fehler[] = sprintf(bw_t('MQTT.THEMA_LEER'), bw_e(bw_vorgaben()['mqtt_thema']));
+        $bw_mq_beanstandet[] = 'mqtt_thema';
+    } elseif (is_string($bw_th_roh) && bw_wert_pruefen('mqtt_thema', $bw_th)) {
         $bw_neu['mqtt_thema'] = $bw_th;
     } else {
         $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
-                               bw_e(bw_t('TEXT.L_THEMA')), bw_e(bw_kurz($bw_th)));
+                               bw_e(bw_t('TEXT.L_THEMA')), bw_e(bw_kurz($bw_th_roh)));
         $bw_mq_beanstandet[] = 'mqtt_thema';
     }
     $bw_vorher = $bw_cfg;
@@ -715,7 +724,7 @@ if ($bw_ms_fehlt) {
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
 
 <div class="sm-feld">
-  <label<?= bw_markiert($bw_eg, 'aktiv') ?>><input data-role="none" type="checkbox" name="aktiv" value="1"<?= bw_formhaken($bw_eg, 'aktiv', $bw_cfg['aktiv']) ? ' checked' : '' ?>>
+  <label<?= bw_markiert($bw_eg, 'aktiv', false) ?>><input data-role="none" type="checkbox" name="aktiv" value="1"<?= bw_ungueltig($bw_eg, 'aktiv') ?><?= bw_formhaken($bw_eg, 'aktiv', $bw_cfg['aktiv']) ? ' checked' : '' ?>>
     <?php echo bw_t('TEXT.L_AKTIV'); ?></label>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_AKTIV'); ?></p>
 </div>
@@ -772,7 +781,7 @@ if ($bw_ms_fehlt) { ?>
 </div>
 
 <div class="sm-feld">
-  <label<?= bw_markiert($bw_eg, 'pruefen_ein') ?>><input data-role="none" type="checkbox" name="pruefen_ein" value="1"<?= bw_formhaken($bw_eg, 'pruefen_ein', $bw_cfg['pruefen_ein']) ? ' checked' : '' ?>>
+  <label<?= bw_markiert($bw_eg, 'pruefen_ein', false) ?>><input data-role="none" type="checkbox" name="pruefen_ein" value="1"<?= bw_ungueltig($bw_eg, 'pruefen_ein') ?><?= bw_formhaken($bw_eg, 'pruefen_ein', $bw_cfg['pruefen_ein']) ? ' checked' : '' ?>>
     <?php echo bw_t('TEXT.L_PRUEFEN'); ?></label>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_PRUEFEN'); ?></p>
 </div>
@@ -798,7 +807,7 @@ if ($bw_ms_fehlt) { ?>
 <h3><?php echo bw_t('TEXT.H_WETTER'); ?></h3>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_WETTER_ERKL'); ?></p>
 <div class="sm-feld">
-  <label<?= bw_markiert($bw_eg, 'wetter_ein') ?>><input data-role="none" type="checkbox" name="wetter_ein" value="1"<?= bw_formhaken($bw_eg, 'wetter_ein', $bw_cfg['wetter_ein']) ? ' checked' : '' ?>>
+  <label<?= bw_markiert($bw_eg, 'wetter_ein', false) ?>><input data-role="none" type="checkbox" name="wetter_ein" value="1"<?= bw_ungueltig($bw_eg, 'wetter_ein') ?><?= bw_formhaken($bw_eg, 'wetter_ein', $bw_cfg['wetter_ein']) ? ' checked' : '' ?>>
     <?php echo bw_t('TEXT.L_WETTER_EIN'); ?></label>
 </div>
 <div class="sm-row">
@@ -890,7 +899,7 @@ if ($bw_gw === null) { ?>
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
   <div class="sm-feld">
-    <label<?= bw_markiert($bw_eg, 'mqtt_ein') ?>><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= bw_formhaken($bw_eg, 'mqtt_ein', $bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
+    <label<?= bw_markiert($bw_eg, 'mqtt_ein', false) ?>><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= bw_ungueltig($bw_eg, 'mqtt_ein') ?><?= bw_formhaken($bw_eg, 'mqtt_ein', $bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
       <?php echo bw_t('MQTT.L_EIN'); ?></label>
     <p class="sm-hilfe"><?php echo bw_t('MQTT.H_EIN'); ?></p>
   </div>

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.23
+Version 0.9.24
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -19,6 +19,20 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.24
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16 und 19).
+Gemessen unter PHP 7.4 und 8.5; nicht am Gerät. Dienst und Takt sind unverändert.
+
+* Ein **leeres MQTT-Thema** wird beanstandet statt still durch `beschattung`
+  ersetzt; gespeichert wird dann nichts, auch nicht der Haken.
+* Eine leere oder kaputte **Miniserver-Wahl** wird beanstandet, sofern LoxBerry
+  Miniserver kennt.
+* Still berichtigt wird nur Leerraum am Rand.
+* Beanstandete Felder sind zusätzlich für Bildschirmleser markiert
+  (`aria-invalid`).
 
 ## Neu in 0.9.23
 
@@ -177,8 +191,12 @@ bleibt eine Beanstandung.
 
 **Beim Speichern im Reiter *Einstellungen* oder *MQTT*** gilt: wird ein Feld
 beanstandet, wird **nichts** gespeichert, auch nicht die übrigen Felder. Die eingetippten Werte stehen danach wieder im Formular, das
-beanstandete Feld ist rot umrandet; ein zweites Neuladen zeigt die
-gespeicherten Werte. Das Wortzeichen der Ecowitt-Weiche reist dabei nicht mit.
+beanstandete Feld ist rot umrandet und trägt `aria-invalid` (Bildschirmleser); ein
+zweites Neuladen zeigt die gespeicherten Werte. Das Wortzeichen der Ecowitt-Weiche
+reist dabei nicht mit. Still berichtigt wird nur Leerraum am Rand; alles andere
+ist eine Beanstandung – auch ein leeres Thema im Reiter *MQTT* (bis 0.9.24 trug
+das Plugin dafür still die Vorgabe `beschattung` ein) und ein leerer Miniserver,
+obwohl LoxBerry Miniserver kennt.
 
 Beim Zurückspielen gilt: eine halb gültige Datei ändert **gar nichts**.
 Unbekannte Schlüssel und unzulässige Werte werden benannt, alle auf einmal, und
