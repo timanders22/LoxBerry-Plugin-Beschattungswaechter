@@ -1047,49 +1047,103 @@ foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
 <div class="sm-step"><b>4. <?php echo bw_t('LOX.S4_T'); ?></b><br><?php echo bw_t('LOX.S4'); ?></div>
 
 <?php
-/* DIE BAUSTEIN-LISTE (O5, Durchgang 30.09.2026).
- *   #1 haengt am Lebenszeichen des Takts (LAUFALTER, neu und hinten an die
- *      Zeile gehaengt), nicht an ALTER: das ist das Alter des letzten Befehls,
- *      bei einem gesunden Waechter regulaer 30 Minuten und nachts zehn
- *      Stunden - "ALTER groesser als 900" war ein Dauerfehlalarm und erkannte
- *      einen toten Takt nicht sicher (gemessen, Pruefbericht Oberflaeche O5).
- *      Die Schwelle ist die von OK (bw_ok_grenze(), 900 s).
+/* DIE BAUSTEIN-LISTE (O5, Durchgang 30.09.2026; X-8 vollstaendig 02.10.2026,
+ * Entscheidung 36).
+ *   EINE Liste fuer alles, was die beiden Vorlagen aus Schritt 6 anlegen, und
+ *      die Meldungen dazu. Titel, Adressen, Suchtexte, Anzeigenamen und
+ *      Grenzen kommen aus DEMSELBEN XML, das die Knoepfe erzeugen
+ *      (bw_vorlage('in'/'out')); die Kennung {F:NAME} aus bw_felder() in
+ *      derselben Reihenfolge. Die Ausgangsvorlage traegt den zweiten Befehl
+ *      nur bei eingeschalteter Zaehlung - die Liste zaehlt mit.
+ *   Die Ausfallerkennung haengt am Lebenszeichen des Takts (LAUFALTER), nicht
+ *      an ALTER: das ist das Alter des letzten Befehls, bei einem gesunden
+ *      Waechter regulaer 30 Minuten und nachts zehn Stunden - "ALTER groesser
+ *      als 900" war ein Dauerfehlalarm (Pruefbericht Oberflaeche O5). Die
+ *      Schwelle ist die von OK (bw_ok_grenze(), 900 s).
  *   Die Bausteintypen heissen wie in Loxone Config
- *      (Werkzeuge/loxone_typ_deutsch.txt, gemessen an den Eigenschaften):
- *      Schwellwertschalter, Analogkomparator, Oder, Benachrichtigung. Bis
- *      0.9.21 stand "Statusbaustein oder Merker" - ein Merker vergleicht
- *      nichts - und "Meldebaustein".
+ *      (Werkzeuge/loxone_typ_deutsch.txt): Schwellwertschalter,
+ *      Analogkomparator, Oder, Benachrichtigung.
  *   Die drei Faelle gehen ueber zwei Oder an die Benachrichtigung: sie sendet
- *      nur beim Wechsel von aus auf ein, und mehrere Quellen unmittelbar an
- *      ihrem Eingang verschluckt eine dauerhaft aktive die uebrigen
- *      (Regeln/09). Ein Oder hat genau zwei Eingaenge.
- *   Verweise auf andere Zeilen werden gerechnet, nicht getippt (Regeln/01).
- * Spalten: Typ, Name, Aufbau (Schluessel, Argumente), Eingang (Schluessel,
- * Argumente). */
+ *      nur beim Wechsel von aus auf ein (Regeln/09). Ein Oder hat genau zwei
+ *      Eingaenge; jede Zeile bezieht sich nur auf kleinere Nummern.
+ *   Verweise auf andere Zeilen werden gerechnet, nicht getippt (Regeln/01):
+ *      {Bn} bzw. {F:NAME} in einem Text wird zur laufenden Nummer "#n".
+ * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML. */
 $bw_grenze = bw_ok_grenze();
-$bw_bausteine = array(
-    array('LOX.B1_TYP', 'BW Waechter tot', 'LOX.B1_P', array($bw_grenze, (int) round($bw_grenze * 2 / 3)), 'LOX.B1_E', array()),
-    array('LOX.B2_TYP', 'BW Waechter gestoert', 'LOX.B2_P', array(), 'LOX.B2_E', array()),
-    array('LOX.B3_TYP', 'BW Automatik abgeschaltet', 'LOX.B3_P', array(), 'LOX.B3_E', array()),
-    array('LOX.B4_TYP', 'BW Meldung 1 oder 2', 'LOX.B4_P', array(), 'LOX.B4_E', array(1, 2)),
-    array('LOX.B5_TYP', 'BW Meldung 1 bis 3', 'LOX.B5_P', array(), 'LOX.B5_E', array(4, 3)),
-    array('LOX.B6_TYP', 'BW Meldung', 'LOX.B6_P', array(), 'LOX.B6_E', array(5)),
+$bw_bs_attr = function ($xml, $tag) {
+    preg_match_all('/<' . $tag . '\s([^>]*?)\/?>/', $xml, $bw_m);
+    $bw_aus = array();
+    foreach ($bw_m[1] as $bw_roh) {
+        preg_match_all('/(\w+)="([^"]*)"/', $bw_roh, $bw_a);
+        $bw_z = array();
+        foreach ($bw_a[1] as $bw_j => $bw_k) {
+            $bw_z[$bw_k] = html_entity_decode($bw_a[2][$bw_j], ENT_QUOTES | ENT_XML1, 'UTF-8');
+        }
+        $bw_aus[] = $bw_z;
+    }
+    return $bw_aus;
+};
+$bw_bs_mono = function ($s) { return '<span class="sm-mono">' . bw_e($s) . '</span>'; };
+$bw_bs_w = function ($z, $k) { return isset($z[$k]) ? (string) $z[$k] : ''; };
+list($bw_vi_datei, $bw_vi_xml) = bw_vorlage('in', $bw_cfg);
+list($bw_vo_datei, $bw_vo_xml) = bw_vorlage('out', $bw_cfg);
+$bw_vi_kopf = $bw_bs_attr($bw_vi_xml, 'VirtualInHttp');
+$bw_vi_kopf = $bw_vi_kopf ? $bw_vi_kopf[0] : array();
+$bw_vo_kopf = $bw_bs_attr($bw_vo_xml, 'VirtualOut');
+$bw_vo_kopf = $bw_vo_kopf ? $bw_vo_kopf[0] : array();
+$bw_bs_feld = array();
+foreach (bw_felder() as $bw_fn => $bw_fi) {
+    if (!empty($bw_fi['zeile'])) { $bw_bs_feld[] = $bw_fn; }
+}
+$bw_bs = array(
+    array('B1', sprintf(bw_t('BAUSTEIN.T_VI'), $bw_bs_mono($bw_vi_datei)), bw_e($bw_bs_w($bw_vi_kopf, 'Title')),
+          sprintf(bw_t('BAUSTEIN.P_VI'), $bw_bs_mono($bw_bs_w($bw_vi_kopf, 'Address')), bw_e($bw_bs_w($bw_vi_kopf, 'PollingTime'))),
+          bw_t('BAUSTEIN.V_KEINE')),
 );
+foreach ($bw_bs_attr($bw_vi_xml, 'VirtualInHttpCmd') as $bw_i => $bw_c) {
+    $bw_bs[] = array(isset($bw_bs_feld[$bw_i]) ? 'F:' . $bw_bs_feld[$bw_i] : 'F:?' . $bw_i,
+          bw_t('BAUSTEIN.T_VIBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Title')),
+          sprintf(bw_t('BAUSTEIN.P_VIBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Check')), bw_e($bw_bs_w($bw_c, 'Comment')),
+                  bw_e($bw_bs_w($bw_c, 'MinVal')), bw_e($bw_bs_w($bw_c, 'MaxVal'))),
+          bw_t('BAUSTEIN.V_KEINE'));
+}
+foreach (array(
+    array('B2', 'T_SCHWELL', 'BW Waechter tot', vsprintf(bw_t('BAUSTEIN.P_TOT'), array($bw_grenze, (int) round($bw_grenze * 2 / 3))), 'V_TOT'),
+    array('B3', 'T_SCHWELL', 'BW Waechter gestoert', bw_t('BAUSTEIN.P_GESTOERT'), 'V_GESTOERT'),
+    array('B4', 'T_KOMPARATOR', 'BW Automatik abgeschaltet', bw_t('BAUSTEIN.P_ABGESCHALTET'), 'V_ABGESCHALTET'),
+    array('B5', 'T_ODER', 'BW Meldung 1 oder 2', bw_t('BAUSTEIN.P_ODER'), 'V_ODER1'),
+    array('B6', 'T_ODER', 'BW Meldung 1 bis 3', bw_t('BAUSTEIN.P_ODER'), 'V_ODER2'),
+    array('B7', 'T_BENACHR', 'BW Meldung', bw_t('BAUSTEIN.P_MELDUNG'), 'V_MELDUNG'),
+) as $bw_z) {
+    $bw_bs[] = array($bw_z[0], bw_t('BAUSTEIN.' . $bw_z[1]), '<span class="sm-mono">' . bw_e($bw_z[2]) . '</span>', $bw_z[3], bw_t('BAUSTEIN.' . $bw_z[4]));
+}
+$bw_bs[] = array('B8', sprintf(bw_t('BAUSTEIN.T_VO'), $bw_bs_mono($bw_vo_datei)), bw_e($bw_bs_w($bw_vo_kopf, 'Title')),
+                 sprintf(bw_t('BAUSTEIN.P_VO'), $bw_bs_mono($bw_bs_w($bw_vo_kopf, 'Address'))), bw_t('BAUSTEIN.V_KEINE'));
+$bw_bs[] = array('B9', bw_t('BAUSTEIN.T_TASTER'), bw_t('BAUSTEIN.N_TASTER'), bw_t('BAUSTEIN.P_TASTER'), bw_t('BAUSTEIN.V_KEINE'));
+foreach ($bw_bs_attr($bw_vo_xml, 'VirtualOutCmd') as $bw_i => $bw_c) {
+    $bw_bs[] = array('C' . $bw_i, bw_t('BAUSTEIN.T_VOBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Title')),
+          sprintf(bw_t('BAUSTEIN.P_VOBEF'), bw_e($bw_bs_w($bw_c, 'Comment')), $bw_bs_mono($bw_bs_w($bw_c, 'CmdOn'))),
+          bw_t($bw_i === 0 ? 'BAUSTEIN.V_TASTER_BSP' : 'BAUSTEIN.V_TASTER_SONST'));
+}
+$bw_bs_nr = array();
+foreach ($bw_bs as $bw_i => $bw_z) { $bw_bs_nr[$bw_z[0]] = $bw_i + 1; }
+$bw_bs_r = function ($s) use ($bw_bs_nr) {
+    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+)\}/', function ($m) use ($bw_bs_nr) {
+        return isset($bw_bs_nr[$m[1]]) ? '#' . $bw_bs_nr[$m[1]] : $m[0];
+    }, (string) $s);
+};
 ?>
-<div class="sm-step"><b>5. <?php echo bw_t('LOX.S5_T'); ?></b><br><?php echo sprintf(bw_t('LOX.S5'), count($bw_bausteine)); ?>
+<div class="sm-step"><b>5. <?php echo bw_t('BAUSTEIN.H'); ?></b><br><?php echo sprintf(bw_t('BAUSTEIN.TEXT'), '<i>' . bw_e($bw_bs_w($bw_vi_kopf, 'Title')) . '</i>', '<i>' . bw_e($bw_bs_w($bw_vo_kopf, 'Title')) . '</i>'); ?>
 <div class="sm-breit">
 <table class="sm-tbl">
-  <tr><th>#</th><th><?php echo bw_t('LOX.BAUSTEIN'); ?></th><th><?php echo bw_t('LOX.NAME'); ?></th><th><?php echo bw_t('LOX.PARAMETER'); ?></th><th><?php echo bw_t('LOX.EINGANG'); ?></th></tr>
-<?php
-$bw_nr2 = 0;
-foreach ($bw_bausteine as $bw_bs) { $bw_nr2++; ?>
-  <tr><td><?= (int) $bw_nr2 ?></td><td><?= bw_e(bw_t($bw_bs[0])) ?></td>
-      <td class="sm-mono"><?= bw_e($bw_bs[1]) ?></td>
-      <td><?= bw_e(vsprintf(bw_t($bw_bs[2]), $bw_bs[3])) ?></td><td><?= bw_e(vsprintf(bw_t($bw_bs[4]), $bw_bs[5])) ?></td></tr>
+  <tr><th>#</th><th><?php echo bw_t('BAUSTEIN.T_TYP'); ?></th><th><?php echo bw_t('BAUSTEIN.T_NAME'); ?></th><th><?php echo bw_t('BAUSTEIN.T_PARAM'); ?></th><th><?php echo bw_t('BAUSTEIN.T_VERB'); ?></th></tr>
+<?php foreach ($bw_bs as $bw_i => $bw_z) { ?>
+  <tr><td><?= (int) $bw_i + 1 ?></td><td><?= $bw_bs_r($bw_z[1]) ?></td><td><?= $bw_bs_r($bw_z[2]) ?></td>
+      <td><?= $bw_bs_r($bw_z[3]) ?></td><td><?= $bw_bs_r($bw_z[4]) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('LOX.ZU_B1'), 1)) ?></p>
+<p class="sm-hilfe"><?= $bw_bs_r(bw_t('BAUSTEIN.ERLAEUTERUNG')) ?></p>
 </div>
 
 <div class="sm-step"><b>6. <?php echo bw_t('LOX.S6_T'); ?></b><br><?php echo bw_t('LOX.S6'); ?>

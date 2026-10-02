@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.25
+Version 0.9.26
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -19,6 +19,19 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.26
+
+Baustein-Liste zum Nachbauen (Nachzug B: X-8, Hausregel A4).
+Gemessen mit der gerenderten Oberfläche unter PHP 7.4 und 8.5 gegen die mitgelieferten Vorlagen; nicht am Gerät.
+
+* **Baustein-Liste vollständig:** Schritt 5 im Reiter „Einbindung in Loxone“ heißt jetzt „Komplette Baustein-Liste zum
+  1:1-Nachbauen“ und führt in einer durchnummerierten Liste (# | Baustein (Typ) | Name (Vorschlag) | Parameter |
+  Eingänge verbinden mit) den HTTP-Eingang „Beschattungswächter“ mit allen Feldern (Suchtext, Anzeigename, Min/Max),
+  die Meldungen in der Logik wie bisher und den Ausgang „Beschattungswächter Befehle“ mit seinen Befehlen samt Adresse
+  und einem Taster als Bedienbeispiel. Die Eingänge der Logik verweisen jetzt auf die Zeilennummer der Felder
+  (z. B. „I1 = #12, I2 = #11“). Adresse und Merkwort stehen fertig eingesetzt.
+* **In Loxone:** nichts zu tun.
 
 ## Neu in 0.9.25
 
