@@ -701,6 +701,29 @@ if ($bw_ms_fehlt) {
 }
 ?>
 
+<?php /* Kopf (Entscheidung Nr. 43, seit 0.9.27): Statusuebersicht ueber den
+   Reitern, immer sichtbar. Nur Werte, die die Seite ohnehin liest
+   (Konfiguration, stand.json, Miniserver aus general.json) - keine Anfrage
+   an den Miniserver. Einen Dienst gibt es nicht: cron.05min ruft bw_lauf.php. */ ?>
+<table class="sm-tbl" style="max-width:620px">
+<tr><th><?= bw_e(bw_t('TEXT.KOPF_EIGENSCHAFT')) ?></th><th><?= bw_e(bw_t('TEXT.KOPF_WERT')) ?></th></tr>
+<tr><td><?= bw_e(bw_t('TEXT.KOPF_WAECHTER')) ?></td>
+    <td class="<?= !empty($bw_cfg['aktiv']) ? 'sm-an' : 'sm-aus' ?>"><?= bw_e(!empty($bw_cfg['aktiv'])
+        ? bw_t('TEXT.KOPF_WAECHTER_EIN') : bw_t('TEXT.KOPF_WAECHTER_AUS')) ?></td></tr>
+<tr><td><?= bw_e(bw_t('TEXT.L_MS')) ?></td>
+    <?= $bw_ms_fehlt
+        ? '<td class="sm-aus">' . bw_e(sprintf(bw_t('TEXT.MS_FEHLT_OPTION'), $bw_ms_nr)) . '</td>'
+        : ($bw_gewaehlt !== null
+            ? '<td>' . bw_e($bw_gewaehlt['name'] . ' (' . $bw_gewaehlt['adresse'] . ')') . '</td>'
+            : '<td class="sm-aus">' . bw_e(bw_t('TEXT.KEIN_MS')) . '</td>') ?></tr>
+<tr><td><?= bw_e(bw_t('TEXT.K_LETZTE')) ?></td>
+    <td><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></td></tr>
+<tr><td><?= bw_e(bw_t('TEXT.K_LETZTE_OK')) ?></td>
+    <td><?= empty($bw_stand['letzte_ok']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte_ok'])) ?></td></tr>
+<tr><td><?= bw_e(bw_t('TEXT.K_FEHLER')) ?></td>
+    <td class="<?= !empty($bw_stand['fehler']) ? 'sm-aus' : 'sm-an' ?>"><?= (int) (isset($bw_stand['fehler']) ? $bw_stand['fehler'] : 0) ?></td></tr>
+</table>
+
 <!-- Die Reiterleiste steht AUSGESCHRIEBEN da, nicht in einer Schleife
      erzeugt. Jeder Reiter ist eine Adresse und bleibt es: wer ohne Skript
      kommt, schaltet ueber den Server um (index.php?form=...). Das Skript am
@@ -723,6 +746,8 @@ if ($bw_ms_fehlt) {
 
 <!-- ================= Einstellungen ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= bw_t('TEXT.WAS_IST_DAS') ?></div>
+
 <h2><?php echo bw_t('TEXT.H_EINSTELLUNGEN'); ?></h2>
 
 <div class="sm-step"><?php echo bw_t('TEXT.WARUM'); ?></div>
