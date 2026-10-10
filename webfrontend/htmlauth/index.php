@@ -677,6 +677,10 @@ if ($bw_rahmen) {
 .sm-kachel .sm-wirkung { display: block; max-width: 340px; margin-top: 4px; color: #33691e; }
 /* Eigene Zutat (X-2): ein beanstandetes Feld nach der Umleitung. */
 .sm-wrap .sm-beanstandet { outline: 2px solid #c62828; outline-offset: 1px; background: #ffebee; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 
 <div class="sm-wrap">
@@ -1093,6 +1097,8 @@ foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
  *      Eingaenge; jede Zeile bezieht sich nur auf kleinere Nummern.
  *   Verweise auf andere Zeilen werden gerechnet, nicht getippt (Regeln/01):
  *      {Bn} bzw. {F:NAME} in einem Text wird zur laufenden Nummer "#n".
+ * Welle Bild 6 (0.9.29): der Inhalt ist durch die Liste des Musterprojekts ersetzt (12 feste
+ *   Zeilen, Kommentar unten); das Obige beschreibt die Liste bis 0.9.28.
  * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML. */
 $bw_grenze = bw_ok_grenze();
 $bw_bs_attr = function ($xml, $tag) {
@@ -1116,40 +1122,44 @@ $bw_vi_kopf = $bw_bs_attr($bw_vi_xml, 'VirtualInHttp');
 $bw_vi_kopf = $bw_vi_kopf ? $bw_vi_kopf[0] : array();
 $bw_vo_kopf = $bw_bs_attr($bw_vo_xml, 'VirtualOut');
 $bw_vo_kopf = $bw_vo_kopf ? $bw_vo_kopf[0] : array();
+/* Welle Bild 6 (0.9.29, Entscheidung A): die Liste ist die im LoxBerry-Plugins Musterprojekt
+ * in Loxone Config gebaute und mit leitungen_setzen.py verbundene (Musterprojekt/
+ * baustein_listen.txt, Abschnitt Beschattungswaechter) - eine Zeile = ein Baustein, nur die
+ * Hauptvariante, 12 feste Zeilen statt einer Zeile je Feld und je Befehl der Vorlagen. Die
+ * Namen #1 bis #4 kommen wie bisher aus DEMSELBEN XML wie der Vorlage-Knopf (bw_vorlage('in'),
+ * Felder in der Reihenfolge von bw_felder()), der Name von #12 aus bw_vorlage('out'), die
+ * Vorlagentitel aus den XML-Koepfen. Die Logiknamen sind in beiden Sprachen die des
+ * Musterprojekts. Kennung Bn = Zeile n; Verweise in den Texten als {Bn}. */
 $bw_bs_feld = array();
 foreach (bw_felder() as $bw_fn => $bw_fi) {
     if (!empty($bw_fi['zeile'])) { $bw_bs_feld[] = $bw_fn; }
 }
-$bw_bs = array(
-    array('B1', sprintf(bw_t('BAUSTEIN.T_VI'), $bw_bs_mono($bw_vi_datei)), bw_e($bw_bs_w($bw_vi_kopf, 'Title')),
-          sprintf(bw_t('BAUSTEIN.P_VI'), $bw_bs_mono($bw_bs_w($bw_vi_kopf, 'Address')), bw_e($bw_bs_w($bw_vi_kopf, 'PollingTime'))),
-          bw_t('BAUSTEIN.V_KEINE')),
-);
+$bw_vi_titel = array();
 foreach ($bw_bs_attr($bw_vi_xml, 'VirtualInHttpCmd') as $bw_i => $bw_c) {
-    $bw_bs[] = array(isset($bw_bs_feld[$bw_i]) ? 'F:' . $bw_bs_feld[$bw_i] : 'F:?' . $bw_i,
-          bw_t('BAUSTEIN.T_VIBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Title')),
-          sprintf(bw_t('BAUSTEIN.P_VIBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Check')), bw_e($bw_bs_w($bw_c, 'Comment')),
-                  bw_e($bw_bs_w($bw_c, 'MinVal')), bw_e($bw_bs_w($bw_c, 'MaxVal'))),
-          bw_t('BAUSTEIN.V_KEINE'));
+    if (isset($bw_bs_feld[$bw_i])) { $bw_vi_titel[$bw_bs_feld[$bw_i]] = $bw_bs_w($bw_c, 'Title'); }
 }
-foreach (array(
-    array('B2', 'T_SCHWELL', 'BW Waechter tot', vsprintf(bw_t('BAUSTEIN.P_TOT'), array($bw_grenze, (int) round($bw_grenze * 2 / 3))), 'V_TOT'),
-    array('B3', 'T_SCHWELL', 'BW Waechter gestoert', bw_t('BAUSTEIN.P_GESTOERT'), 'V_GESTOERT'),
-    array('B4', 'T_KOMPARATOR', 'BW Automatik abgeschaltet', bw_t('BAUSTEIN.P_ABGESCHALTET'), 'V_ABGESCHALTET'),
-    array('B5', 'T_ODER', 'BW Meldung 1 oder 2', bw_t('BAUSTEIN.P_ODER'), 'V_ODER1'),
-    array('B6', 'T_ODER', 'BW Meldung 1 bis 3', bw_t('BAUSTEIN.P_ODER'), 'V_ODER2'),
-    array('B7', 'T_BENACHR', 'BW Meldung', bw_t('BAUSTEIN.P_MELDUNG'), 'V_MELDUNG'),
-) as $bw_z) {
-    $bw_bs[] = array($bw_z[0], bw_t('BAUSTEIN.' . $bw_z[1]), '<span class="sm-mono">' . bw_e($bw_z[2]) . '</span>', $bw_z[3], bw_t('BAUSTEIN.' . $bw_z[4]));
-}
-$bw_bs[] = array('B8', sprintf(bw_t('BAUSTEIN.T_VO'), $bw_bs_mono($bw_vo_datei)), bw_e($bw_bs_w($bw_vo_kopf, 'Title')),
-                 sprintf(bw_t('BAUSTEIN.P_VO'), $bw_bs_mono($bw_bs_w($bw_vo_kopf, 'Address'))), bw_t('BAUSTEIN.V_KEINE'));
-$bw_bs[] = array('B9', bw_t('BAUSTEIN.T_TASTER'), bw_t('BAUSTEIN.N_TASTER'), bw_t('BAUSTEIN.P_TASTER'), bw_t('BAUSTEIN.V_KEINE'));
-foreach ($bw_bs_attr($bw_vo_xml, 'VirtualOutCmd') as $bw_i => $bw_c) {
-    $bw_bs[] = array('C' . $bw_i, bw_t('BAUSTEIN.T_VOBEF'), $bw_bs_mono($bw_bs_w($bw_c, 'Title')),
-          sprintf(bw_t('BAUSTEIN.P_VOBEF'), bw_e($bw_bs_w($bw_c, 'Comment')), $bw_bs_mono($bw_bs_w($bw_c, 'CmdOn'))),
-          bw_t($bw_i === 0 ? 'BAUSTEIN.V_TASTER_BSP' : 'BAUSTEIN.V_TASTER_SONST'));
-}
+$bw_bs_vi = function ($feld) use ($bw_vi_titel, $bw_bs_mono) {
+    return $bw_bs_mono(isset($bw_vi_titel[$feld]) ? $bw_vi_titel[$feld] : 'BW ' . $feld);
+};
+$bw_vo_bef = $bw_bs_attr($bw_vo_xml, 'VirtualOutCmd');
+$bw_bs_jetzt = $bw_vo_bef ? $bw_bs_w($bw_vo_bef[0], 'Title') : '';
+$bw_bs_vit = bw_e($bw_bs_w($bw_vi_kopf, 'Title'));
+$bw_bs_vot = bw_e($bw_bs_w($bw_vo_kopf, 'Title'));
+$bw_bs = array(
+    array('B1', sprintf(bw_t('BAUSTEIN.B1_TYP'), $bw_bs_vit), $bw_bs_vi('LAUFALTER'), bw_t('BAUSTEIN.B1_PARAM'), bw_t('BAUSTEIN.B1_VERB')),
+    array('B2', sprintf(bw_t('BAUSTEIN.B2_TYP'), $bw_bs_vit), $bw_bs_vi('FEHLER'), bw_t('BAUSTEIN.B2_PARAM'), bw_t('BAUSTEIN.B2_VERB')),
+    array('B3', sprintf(bw_t('BAUSTEIN.B3_TYP'), $bw_bs_vit), $bw_bs_vi('AUTOMATIKEN'), bw_t('BAUSTEIN.B3_PARAM'), bw_t('BAUSTEIN.B3_VERB')),
+    array('B4', sprintf(bw_t('BAUSTEIN.B4_TYP'), $bw_bs_vit), $bw_bs_vi('SCHARF'), bw_t('BAUSTEIN.B4_PARAM'), bw_t('BAUSTEIN.B4_VERB')),
+    array('B5', bw_t('BAUSTEIN.B5_TYP'), $bw_bs_mono('BW Waechter tot'),
+          vsprintf(bw_t('BAUSTEIN.B5_PARAM'), array($bw_grenze, (int) round($bw_grenze * 2 / 3))), bw_t('BAUSTEIN.B5_VERB')),
+    array('B6', bw_t('BAUSTEIN.B6_TYP'), $bw_bs_mono('BW Waechter gestoert'), bw_t('BAUSTEIN.B6_PARAM'), bw_t('BAUSTEIN.B6_VERB')),
+    array('B7', bw_t('BAUSTEIN.B7_TYP'), $bw_bs_mono('BW Automatik abgeschaltet'), bw_t('BAUSTEIN.B7_PARAM'), bw_t('BAUSTEIN.B7_VERB')),
+    array('B8', bw_t('BAUSTEIN.B8_TYP'), $bw_bs_mono('BW Meldung 1 oder 2'), bw_t('BAUSTEIN.B8_PARAM'), bw_t('BAUSTEIN.B8_VERB')),
+    array('B9', bw_t('BAUSTEIN.B9_TYP'), $bw_bs_mono('BW Meldung 1 bis 3'), bw_t('BAUSTEIN.B9_PARAM'), bw_t('BAUSTEIN.B9_VERB')),
+    array('B10', bw_t('BAUSTEIN.B10_TYP'), $bw_bs_mono('BW Meldung'), bw_t('BAUSTEIN.B10_PARAM'), bw_t('BAUSTEIN.B10_VERB')),
+    array('B11', bw_t('BAUSTEIN.B11_TYP'), $bw_bs_mono('BW Befehl jetzt'), bw_t('BAUSTEIN.B11_PARAM'), bw_t('BAUSTEIN.B11_VERB')),
+    array('B12', sprintf(bw_t('BAUSTEIN.B12_TYP'), $bw_bs_vot), $bw_bs_mono($bw_bs_jetzt), bw_t('BAUSTEIN.B12_PARAM'), bw_t('BAUSTEIN.B12_VERB')),
+);
 $bw_bs_nr = array();
 foreach ($bw_bs as $bw_i => $bw_z) { $bw_bs_nr[$bw_z[0]] = $bw_i + 1; }
 $bw_bs_r = function ($s) use ($bw_bs_nr) {
@@ -1168,7 +1178,13 @@ $bw_bs_r = function ($s) use ($bw_bs_nr) {
 <?php } ?>
 </table>
 </div>
-<p class="sm-hilfe"><?= $bw_bs_r(bw_t('BAUSTEIN.ERLAEUTERUNG')) ?></p>
+<p class="sm-hilfe"><?= $bw_bs_r(bw_t('BAUSTEIN.ERLAEUTERUNG')) ?><br>
+<?= bw_t('BAUSTEIN.H_GROESSER') ?></p>
+<figure class="sm-bild">
+<img src="einbindung_loxone.png" alt="<?= bw_e(bw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= bw_e(bw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?= bw_t('LOX.MUSTERPROJEKT') ?></p>
 </div>
 
 <div class="sm-step"><b>6. <?php echo bw_t('LOX.S6_T'); ?></b><br><?php echo bw_t('LOX.S6'); ?>

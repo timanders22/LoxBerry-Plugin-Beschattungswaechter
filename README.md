@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.28
+Version 0.9.29
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -19,6 +19,22 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.29
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei; die Baustein-Liste ist die dort in Loxone Config gebaute.
+
+* Unter der Baustein-Liste (Schritt 5) steht das Bild der Seite „Beschattungswächter“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* **Baustein-Liste neu (12 feste Zeilen):** eine Zeile = ein Baustein, nur die Hauptvariante, so wie
+  im Musterprojekt gebaut und verbunden. Bisher stand je Feld der Vorlage „Beschattungswächter“ und
+  je Befehl der Vorlage „Beschattungswächter Befehle“ eine Zeile da (ab Werk 22). Jetzt nur die
+  Eingänge `BW LAUFALTER`, `BW FEHLER`, `BW AUTOMATIKEN` und `BW SCHARF`, die Meldungen und der
+  Befehl `BW Befehl jetzt senden` an der Taste „BW Befehl jetzt“. „BW Automatik abgeschaltet“ ist
+  jetzt der Baustein „Größer“ (bisher „Analogkomparator“), dazu ein Hinweis unter der Tabelle.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 0.9.28
 
@@ -274,6 +290,10 @@ Er antwortet mit einer Zeile aus benannten Feldern (`OK`, `AKTIV`, `FENSTER`,
 durch die Einrichtung, zeigt zu jedem Feld die Befehlserkennung — mit dem
 **führenden Semikolon**, ohne das Loxone den falschen Treffer nimmt — und
 liefert zwei fertige Vorlagen zum Einlesen.
+
+Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden auf
+der Seite „Beschattungswächter“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 Vier Festlegungen, jede aus einem Vorfall dieser Plugin-Sammlung:
 
