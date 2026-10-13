@@ -1099,6 +1099,12 @@ foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
  *      {Bn} bzw. {F:NAME} in einem Text wird zur laufenden Nummer "#n".
  * Welle Bild 6 (0.9.29): der Inhalt ist durch die Liste des Musterprojekts ersetzt (12 feste
  *   Zeilen, Kommentar unten); das Obige beschreibt die Liste bis 0.9.28.
+ * Welle Bild 11 VOLL (0.9.30, Hausherr 11.10.2026: Vollausstattung, ein Laie soll das Maximum
+ *   leicht uebernehmen koennen): 32 Zeilen aus Musterprojekt/baustein_listen.txt, Abschnitt
+ *   Beschattungswaechter; Zeilen 1 bis 12 wie bisher, nur #12 bekommt seine Leitung jetzt vom
+ *   ODER #30 (Taste #11 oder Beginn der Beschattung) - der Satz "jede Zeile bezieht sich nur auf
+ *   kleinere Nummern" gilt deshalb bis auf #12. Dazu Ueberschrift, Kasten "So uebernehmen Sie
+ *   diese Seite" (BAUSTEIN.A_S1..A_S11) und Hinweise (Kommentar unten).
  * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML. */
 $bw_grenze = bw_ok_grenze();
 $bw_bs_attr = function ($xml, $tag) {
@@ -1143,6 +1149,15 @@ $bw_bs_vi = function ($feld) use ($bw_vi_titel, $bw_bs_mono) {
 };
 $bw_vo_bef = $bw_bs_attr($bw_vo_xml, 'VirtualOutCmd');
 $bw_bs_jetzt = $bw_vo_bef ? $bw_bs_w($bw_vo_bef[0], 'Title') : '';
+/* Welle Bild 11 VOLL (0.9.30): Zeile 32 nennt den Befehl "Automatiken zaehlen". Die Vorlage traegt
+ * ihn nur mit dem Haken "Die Wirkung messen" (pruefen_ein). Der Name kommt deshalb aus DERSELBEN
+ * Funktion wie der Vorlage-Knopf, mit gesetztem Haken - nur fuer die Anzeige; gespeichert und
+ * gesendet wird nichts. Erkannt am Befehl aktion=pruefen, nicht an der Stelle. */
+list($bw_vq_datei_voll, $bw_vq_xml_voll) = bw_vorlage('out', array('pruefen_ein' => 1) + $bw_cfg);
+$bw_bs_zaehlen = '';
+foreach ($bw_bs_attr($bw_vq_xml_voll, 'VirtualOutCmd') as $bw_c) {
+    if (strpos($bw_bs_w($bw_c, 'CmdOn'), 'aktion=pruefen') !== false) { $bw_bs_zaehlen = $bw_bs_w($bw_c, 'Title'); }
+}
 $bw_bs_vit = bw_e($bw_bs_w($bw_vi_kopf, 'Title'));
 $bw_bs_vot = bw_e($bw_bs_w($bw_vo_kopf, 'Title'));
 $bw_bs = array(
@@ -1159,16 +1174,56 @@ $bw_bs = array(
     array('B10', bw_t('BAUSTEIN.B10_TYP'), $bw_bs_mono('BW Meldung'), bw_t('BAUSTEIN.B10_PARAM'), bw_t('BAUSTEIN.B10_VERB')),
     array('B11', bw_t('BAUSTEIN.B11_TYP'), $bw_bs_mono('BW Befehl jetzt'), bw_t('BAUSTEIN.B11_PARAM'), bw_t('BAUSTEIN.B11_VERB')),
     array('B12', sprintf(bw_t('BAUSTEIN.B12_TYP'), $bw_bs_vot), $bw_bs_mono($bw_bs_jetzt), bw_t('BAUSTEIN.B12_PARAM'), bw_t('BAUSTEIN.B12_VERB')),
+    array('B13', sprintf(bw_t('BAUSTEIN.B13_TYP'), $bw_bs_vit), $bw_bs_vi('OK'), bw_t('BAUSTEIN.B13_PARAM'), bw_t('BAUSTEIN.B13_VERB')),
+    array('B14', sprintf(bw_t('BAUSTEIN.B14_TYP'), $bw_bs_vit), $bw_bs_vi('AKTIV'), bw_t('BAUSTEIN.B14_PARAM'), bw_t('BAUSTEIN.B14_VERB')),
+    array('B15', sprintf(bw_t('BAUSTEIN.B15_TYP'), $bw_bs_vit), $bw_bs_vi('FENSTER'), bw_t('BAUSTEIN.B15_PARAM'), bw_t('BAUSTEIN.B15_VERB')),
+    array('B16', sprintf(bw_t('BAUSTEIN.B16_TYP'), $bw_bs_vit), $bw_bs_vi('ZIELE'), bw_t('BAUSTEIN.B16_PARAM'), bw_t('BAUSTEIN.B16_VERB')),
+    array('B17', bw_t('BAUSTEIN.B17_TYP'), $bw_bs_mono('BW Zustand'), bw_t('BAUSTEIN.B17_PARAM'), bw_t('BAUSTEIN.B17_VERB')),
+    array('B18', sprintf(bw_t('BAUSTEIN.B18_TYP'), $bw_bs_vit), $bw_bs_vi('GESENDET'), bw_t('BAUSTEIN.B18_PARAM'), bw_t('BAUSTEIN.B18_VERB')),
+    array('B19', sprintf(bw_t('BAUSTEIN.B19_TYP'), $bw_bs_vit), $bw_bs_vi('CODE'), bw_t('BAUSTEIN.B19_PARAM'), bw_t('BAUSTEIN.B19_VERB')),
+    array('B20', sprintf(bw_t('BAUSTEIN.B20_TYP'), $bw_bs_vit), $bw_bs_vi('ALTER'), bw_t('BAUSTEIN.B20_PARAM'), bw_t('BAUSTEIN.B20_VERB')),
+    array('B21', bw_t('BAUSTEIN.B21_TYP'), $bw_bs_mono('BW Minuten seit Befehl'), bw_t('BAUSTEIN.B21_PARAM'), bw_t('BAUSTEIN.B21_VERB')),
+    array('B22', bw_t('BAUSTEIN.B22_TYP'), $bw_bs_mono('BW Letzter Befehl'), bw_t('BAUSTEIN.B22_PARAM'), bw_t('BAUSTEIN.B22_VERB')),
+    array('B23', bw_t('BAUSTEIN.B23_TYP'), $bw_bs_mono('BW Automatiken'), bw_t('BAUSTEIN.B23_PARAM'), bw_t('BAUSTEIN.B23_VERB')),
+    array('B24', bw_t('BAUSTEIN.B24_TYP'), $bw_bs_mono('BW kein Ziel'), bw_t('BAUSTEIN.B24_PARAM'), bw_t('BAUSTEIN.B24_VERB')),
+    array('B25', bw_t('BAUSTEIN.B25_TYP'), $bw_bs_mono("BW ohne Ziel h\u{e4}lt an"), bw_t('BAUSTEIN.B25_PARAM'), bw_t('BAUSTEIN.B25_VERB')),
+    array('B26', bw_t('BAUSTEIN.B26_TYP'), $bw_bs_mono('BW ohne Ziel'), bw_t('BAUSTEIN.B26_PARAM'), bw_t('BAUSTEIN.B26_VERB')),
+    array('B27', bw_t('BAUSTEIN.B27_TYP'), $bw_bs_mono('Beschattungsfreigabe (eigene Quelle)'), bw_t('BAUSTEIN.B27_PARAM'), bw_t('BAUSTEIN.B27_VERB')),
+    array('B28', bw_t('BAUSTEIN.B28_TYP'), $bw_bs_mono('BW Freigabe beruhigt'), bw_t('BAUSTEIN.B28_PARAM'), bw_t('BAUSTEIN.B28_VERB')),
+    array('B29', bw_t('BAUSTEIN.B29_TYP'), $bw_bs_mono('BW Beschattung beginnt'), bw_t('BAUSTEIN.B29_PARAM'), bw_t('BAUSTEIN.B29_VERB')),
+    array('B30', bw_t('BAUSTEIN.B30_TYP'), $bw_bs_mono("BW Befehl jetzt ausl\u{f6}sen"), bw_t('BAUSTEIN.B30_PARAM'), bw_t('BAUSTEIN.B30_VERB')),
+    array('B31', bw_t('BAUSTEIN.B31_TYP'), $bw_bs_mono("BW Automatiken jetzt z\u{e4}hlen"), bw_t('BAUSTEIN.B31_PARAM'), bw_t('BAUSTEIN.B31_VERB')),
+    array('B32', sprintf(bw_t('BAUSTEIN.B32_TYP'), $bw_bs_vot), $bw_bs_mono($bw_bs_zaehlen), bw_t('BAUSTEIN.B32_PARAM'), bw_t('BAUSTEIN.B32_VERB')),
 );
 $bw_bs_nr = array();
 foreach ($bw_bs as $bw_i => $bw_z) { $bw_bs_nr[$bw_z[0]] = $bw_i + 1; }
-$bw_bs_r = function ($s) use ($bw_bs_nr) {
-    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+)\}/', function ($m) use ($bw_bs_nr) {
-        return isset($bw_bs_nr[$m[1]]) ? '#' . $bw_bs_nr[$m[1]] : $m[0];
+/* Welle Bild 11 VOLL: dazu {T:VI}/{T:VO} (Titel der Vorlagen), {T:VI_DATEI}/{T:VO_DATEI} (ihre
+ * Dateinamen) und {L:ABSCHNITT.SCHLUESSEL} (Beschriftung der Oberflaeche: Knopf, Haken, Reiter) -
+ * genannt wird, was dasteht, nicht abgeschrieben. Eingesetzte Texte maskiert. */
+$bw_bs_ph = array(
+    'T:VI' => $bw_bs_w($bw_vi_kopf, 'Title'), 'T:VO' => $bw_bs_w($bw_vo_kopf, 'Title'),
+    'T:VI_DATEI' => $bw_vi_datei, 'T:VO_DATEI' => $bw_vo_datei,
+);
+$bw_bs_r = function ($s) use ($bw_bs_nr, $bw_bs_ph) {
+    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+|T:[A-Z_]+|L:[A-Z]+\.[A-Z0-9_]+)\}/', function ($m) use ($bw_bs_nr, $bw_bs_ph) {
+        if (isset($bw_bs_nr[$m[1]])) { return '#' . $bw_bs_nr[$m[1]]; }
+        if (isset($bw_bs_ph[$m[1]])) { return bw_e($bw_bs_ph[$m[1]]); }
+        if (strncmp($m[1], 'L:', 2) === 0) { return bw_e(bw_t(substr($m[1], 2))); }
+        return $m[0];
     }, (string) $s);
 };
+$bw_bs_schritte = array('A_S1', 'A_S2', 'A_S3', 'A_S4', 'A_S5', 'A_S6', 'A_S7', 'A_S8', 'A_S9', 'A_S10', 'A_S11');
+$bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_HAND', 'H_SPERRE', 'H_ALLE');
 ?>
-<div class="sm-step"><b>5. <?php echo bw_t('BAUSTEIN.H'); ?></b><br><?php echo sprintf(bw_t('BAUSTEIN.TEXT'), '<i>' . bw_e($bw_bs_w($bw_vi_kopf, 'Title')) . '</i>', '<i>' . bw_e($bw_bs_w($bw_vo_kopf, 'Title')) . '</i>'); ?>
+<div class="sm-step"><b>5. <?php echo bw_t('BAUSTEIN.H'); ?></b><br><?php echo $bw_bs_r(sprintf(bw_t('BAUSTEIN.TEXT'), '<i>' . bw_e($bw_bs_w($bw_vi_kopf, 'Title')) . '</i>', '<i>' . bw_e($bw_bs_w($bw_vo_kopf, 'Title')) . '</i>')); ?>
+<h3><?php echo bw_e(bw_t('BAUSTEIN.UE_TITEL')); ?></h3>
+<div class="sm-hinweis"><b><?php echo bw_e(bw_t('BAUSTEIN.SO_TITEL')); ?></b>
+<ol>
+<?php foreach ($bw_bs_schritte as $bw_k) { ?>
+<li><?= $bw_bs_r(bw_t('BAUSTEIN.' . $bw_k)) ?></li>
+<?php } ?>
+</ol>
+</div>
 <div class="sm-breit">
 <table class="sm-tbl">
   <tr><th>#</th><th><?php echo bw_t('BAUSTEIN.T_TYP'); ?></th><th><?php echo bw_t('BAUSTEIN.T_NAME'); ?></th><th><?php echo bw_t('BAUSTEIN.T_PARAM'); ?></th><th><?php echo bw_t('BAUSTEIN.T_VERB'); ?></th></tr>
@@ -1178,8 +1233,12 @@ $bw_bs_r = function ($s) use ($bw_bs_nr) {
 <?php } ?>
 </table>
 </div>
-<p class="sm-hilfe"><?= $bw_bs_r(bw_t('BAUSTEIN.ERLAEUTERUNG')) ?><br>
-<?= bw_t('BAUSTEIN.H_GROESSER') ?></p>
+<p class="sm-hilfe"><b><?php echo bw_e(bw_t('BAUSTEIN.H_TITEL')); ?></b></p>
+<ul class="sm-hilfe">
+<?php foreach ($bw_bs_hinweise as $bw_k) { ?>
+<li><?= $bw_bs_r(bw_t('BAUSTEIN.' . $bw_k)) ?></li>
+<?php } ?>
+</ul>
 <figure class="sm-bild">
 <img src="einbindung_loxone.png" alt="<?= bw_e(bw_t('LOX.BILD_ALT')) ?>" loading="lazy">
 <figcaption><?= bw_e(bw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
