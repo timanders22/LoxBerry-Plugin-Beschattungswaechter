@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.31
+Version 0.9.32
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,16 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.32
+
+* **Das A heißt auch am einzelnen Rollladen `auto`.** Gemessen am 26.10.2026 an einem Rollladen: `autoshade/1`
+  antwortet mit 200, die Automatik bleibt aber aus; `auto` schaltet sie ein. Die Ziele 2 bis 6 tragen ab Werk
+  jetzt `auto`.
+* **Übergang:** ein gespeichertes Ziel mit genau `autoshade/1` wird beim Update (Konfiguration und
+  Zweitschrift) und beim Zurückspielen einer älteren Sicherung zu `auto`; je Ziel steht einmal eine Zeile im
+  Protokoll („Ziel N: Befehl autoshade/1 → auto (gemessen: autoshade/1 wirkt nicht)“). Andere Befehle bleiben,
+  wie sie sind.
 
 ## Neu in 0.9.31
 
@@ -256,8 +266,9 @@ verschieben.
    das A in der App grün, trägt der Weg.
 3. Ab dann übernimmt der Cron.
 
-Am Zentralbaustein heißt der Befehl `auto`, an einem einzelnen Rollladen
-`autoshade/1`. Beides schaltet ein; `noauto` und `autoshade/0` schalten aus.
+Der Befehl heißt am Zentralbaustein wie an einem einzelnen Rollladen `auto`;
+`noauto` schaltet aus. `autoshade/1` – bis 0.9.31 die Werksvorgabe der Ziele
+2 bis 6 – wirkt an einem einzelnen Rollladen nicht (gemessen am 26.10.2026).
 
 ## Einstellungen sichern und zurückspielen
 

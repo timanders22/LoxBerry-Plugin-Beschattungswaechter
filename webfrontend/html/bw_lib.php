@@ -6,7 +6,8 @@
  * ---------------------------
  * In Loxone laesst sich die Sonnenstandsautomatik eines Rollladens aus der
  * Logik heraus NICHT einschalten. Das "A" in der App ist ein Befehl
- * (autoshade/1 am Rollladen, auto am Zentralbaustein), kein Eingang am
+ * (auto - am Zentralbaustein wie am einzelnen Rollladen; autoshade/1 wirkt
+ * am Rollladen nicht, gemessen 26.10.2026), kein Eingang am
  * Baustein. Es gibt Sps (Start), DisSp (Sperre) und Spr (Reaktivierung) -
  * aber keinen Eingang, der die abgeschaltete Automatik zurueckholt.
  *
@@ -247,16 +248,18 @@ function bw_vorgaben()
         'ms_nr'        => '',
         'uuid'         => '',
         'befehl'       => 'auto',
+        /* Gruppe 29 (0.9.32): auch die Ziele 2-6 ab Werk auto - gemessen am 26.10.2026 an einem Rollladen:
+           autoshade/1 antwortet 200, autoActive bleibt 0; auto schaltet ein. Bestand: bw_befehl_uebergang(). */
         'uuid2'        => '',
-        'befehl2'      => 'autoshade/1',
+        'befehl2'      => 'auto',
         'uuid3'        => '',
-        'befehl3'      => 'autoshade/1',
+        'befehl3'      => 'auto',
         'uuid4'        => '',
-        'befehl4'      => 'autoshade/1',
+        'befehl4'      => 'auto',
         'uuid5'        => '',
-        'befehl5'      => 'autoshade/1',
+        'befehl5'      => 'auto',
         'uuid6'        => '',
-        'befehl6'      => 'autoshade/1',
+        'befehl6'      => 'auto',
         'von'          => '06:00',
         'bis'          => '21:00',
         'abstand'      => 60,
@@ -575,6 +578,7 @@ function bw_config($erzeugen = true)
     $verworfen = array();
     $d = null;
     $war_kaputt = false;
+    $bw_bz = array();
 
     if (is_file($p['cfgdatei'])) {
         $roh = (string) @file_get_contents($p['cfgdatei']);
@@ -641,6 +645,9 @@ function bw_config($erzeugen = true)
         /* DIE LESE-REGEL (Gruppe 23, E-E12/E-E13): fehlt einer Datei MIT Inhalt endpunkt_ein, gilt 1, fehlt mqtt_ein,
            gilt 0 (bw_uebergang()). Der Schluessel bleibt "fehlend" - die Vervollstaendigung unten schreibt ihn
            dann mit diesem Wert, nicht mit der Vorgabe. */
+        /* GRUPPE 29 (0.9.32): ein gespeichertes Ziel mit genau autoshade/1 gilt als auto (bw_befehl_uebergang()).
+           Geschrieben wird es unten, nach der Vervollstaendigung, und nur mit $erzeugen. */
+        list($d, $bw_bz) = bw_befehl_uebergang($d);
         $bw_u = bw_uebergang($d);
         foreach ($c as $k => $v) {
             if (!array_key_exists($k, $d)) {
@@ -693,6 +700,13 @@ function bw_config($erzeugen = true)
             $fehlend = in_array('aktionstoken', $fehlend, true)
                 ? array('aktionstoken') : array();
         }
+    }
+
+    /* Gruppe 29: autoshade/1 -> auto in Datei und Zweitschrift, je Ziel eine Protokollzeile (einmal - danach
+       steht auto in der Datei). Auch der Weg nach dem Zurueckspielen einer Sicherung (index.php ruft danach
+       bw_config()) und nach einem Update, dessen postupgrade.sh nicht umstellen konnte. */
+    if ($erzeugen && $bw_bz) {
+        bw_befehl_uebergang_dateien($bw_bz);
     }
 
     /* EIN VERWORFENER WERT GEHOERT INS PROTOKOLL, NICHT NUR IN DIE LAGE.
@@ -5923,9 +5937,11 @@ function bw_vorlage_befehle()
  * Jalousie mit Automatik (details.isAutomatic bzw. Zustand autoActive, Befehl
  * auto). Eine Jalousie ohne Automatik nimmt es nicht an und wird nur gezaehlt.
  * Der Knopf liest nur die Strukturdatei und speichert nichts; die Auswahl
- * fuellt nur das Formular. "autoshade/1" (Vorgabe der Ziele 2-6) steht in
- * keinem Loxone-Dokument und bleibt Werksvorgabe, bis es an einem Rollladen
- * gemessen ist (N3, E-E7).
+ * fuellt nur das Formular. "autoshade/1" (bis 0.9.31 Vorgabe der Ziele 2-6)
+ * steht in keinem Loxone-Dokument; gemessen am 26.10.2026 an einem Rollladen
+ * (E-E7, Gruppe 29): autoshade/1 -> Code 200, autoActive bleibt 0; auto ->
+ * autoActive 1. Seit 0.9.32 ist auto die Werksvorgabe aller Ziele, und
+ * bw_befehl_uebergang() stellt gespeicherte autoshade/1 um (Abschnitt O).
  * ================================================================== */
 
 /** Rueckgabe array(ok, Meldung, Liste, Zahl ohne Automatik). Liste: art, name, raum, uuid, befehl, umfasst. */
@@ -5997,4 +6013,72 @@ function bw_vorschlag_pruefen($roh)
         }
     }
     return array('liste' => $liste, 'ohne' => isset($roh['ohne']) ? (int) $roh['ohne'] : 0);
+}
+
+/* ==================================================================
+ * O. BEFEHL autoshade/1 -> auto (Gruppe 29, 0.9.32, 26.10.2026)
+ * ==================================================================
+ *
+ * Gemessen am 26.10.2026 an einem einzelnen Rollladen (AutoJalousie):
+ * autoshade/1 -> Code 200, autoActive bleibt 0 (zweimal); auto -> 1;
+ * NoAuto -> 0. Der Zentralbaustein nimmt auto (unveraendert). Bis 0.9.31
+ * trugen die Ziele 2-6 ab Werk autoshade/1 - ein solches Ziel drueckte das A
+ * nie. Umgestellt wird nur der genaue Wert autoshade/1; jeder andere Befehl
+ * bleibt, wie er ist.
+ * ================================================================== */
+
+/** Rein: array(Daten mit auto statt autoshade/1, umgestellte Zielnummern 1-6). Aendert keine Datei. */
+function bw_befehl_uebergang(array $d)
+{
+    $ziele = array();
+    for ($i = 1; $i <= 6; $i++) {
+        $k = 'befehl' . ($i === 1 ? '' : (string) $i);
+        if (isset($d[$k]) && is_string($d[$k]) && trim($d[$k]) === 'autoshade/1') {
+            $d[$k] = 'auto';
+            $ziele[] = $i;
+        }
+    }
+    return array($d, $ziele);
+}
+
+/** Die Protokollzeile je Ziel (dieselbe in bw_config() und postupgrade.sh). */
+function bw_befehl_uebergang_zeile($n)
+{
+    return 'Ziel ' . (int) $n . ": Befehl autoshade/1 \u{2192} auto (gemessen: autoshade/1 wirkt nicht)";
+}
+
+/**
+ * Konfiguration und Zweitschrift umstellen - jede fuer sich gelesen, nur die
+ * Befehlsschluessel geaendert, alles andere (auch ein verworfener Wert) bleibt
+ * stehen. Die Zeilen kommen erst, wenn die Konfiguration danach kein
+ * autoshade/1 mehr traegt; sonst eine Fehlerzeile hoechstens einmal je Stunde
+ * (es gilt trotzdem auto - die Lese-Regel in bw_config()).
+ */
+function bw_befehl_uebergang_dateien(array $ziele)
+{
+    $p = bw_paths();
+    foreach (array($p['cfgdatei'], $p['sicherung']) as $f) {
+        if (!is_file($f)) {
+            continue;
+        }
+        $d = json_decode((string) @file_get_contents($f), true);
+        if (!is_array($d)) {
+            continue;
+        }
+        list($n, $z) = bw_befehl_uebergang($d);
+        if ($z) {
+            bw_json_schreiben($f, $n);
+        }
+    }
+    $d = json_decode((string) @file_get_contents($p['cfgdatei']), true);
+    list($n, $rest) = bw_befehl_uebergang(is_array($d) ? $d : array());
+    if (!is_array($d) || $rest) {
+        bw_log_wenn_neu('befehl_uebergang',
+            'FEHLER: autoshade/1 liess sich in der Konfiguration nicht auf auto umstellen; es gilt trotzdem auto.');
+        return false;
+    }
+    foreach ($ziele as $i) {
+        bw_log(bw_befehl_uebergang_zeile($i));
+    }
+    return true;
 }

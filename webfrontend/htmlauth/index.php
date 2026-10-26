@@ -240,7 +240,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
        stillschweigend nicht gesendet (bw_ziele zaehlt nur vollstaendige
        Ziele), und der Bediener saehe nichts als eine Zeile, die nichts tut. */
     /* B2 (Gruppe 23): beide Richtungen. "Kennung leer, Befehl gefuellt" ist halb - AUSSER der Befehl ist der
-       Werksbefehl der Zeile (N2: die Ziele 2-6 tragen ab Werk autoshade/1 ohne Kennung; sonst beanstandete jedes
+       Werksbefehl der Zeile (N2: die Ziele 2-6 tragen ab Werk auto ohne Kennung - bis 0.9.31 autoshade/1; sonst
+       beanstandete jedes
        Speichern einer Neuinstallation). Eine Fassade an einem Ziel ohne Kennung wird gespeichert und genannt. */
     $bw_werk = bw_vorgaben();
     for ($bw_i = 1; $bw_i <= 6; $bw_i++) {

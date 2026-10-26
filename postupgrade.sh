@@ -99,6 +99,50 @@ case "$PFOLDER" in
         bw_endpunkt_ein "$BASE/config/plugins/$PFOLDER.backup.json"
         ;;
 esac
+
+# ---------- Befehl autoshade/1 -> auto (Gruppe 29, 0.9.32) ----------
+# Gemessen am 26.10.2026 an einem einzelnen Rollladen: autoshade/1 -> Code 200, die Automatik bleibt aus; auto schaltet
+# sie ein. Ein gespeichertes Ziel mit genau autoshade/1 wird auto (bw_befehl_uebergang()); andere Befehle bleiben.
+# Konfiguration UND Zweitschrift, Bauart bw_endpunkt_ein (Nebendatei .neu mit umask 077, Gegenprobe, mv -f, chmod 600).
+# Je Ziel eine Zeile hier und - fuer die Konfiguration - im Protokoll des Plugins. Scheitert es, stellt bw_config()
+# beim ersten Takt um (Lese-Regel) und schreibt die Zeile dann selbst.
+bw_befehl_auto() {
+    bw_f="$1"
+    bw_wo="$2"
+    [ -f "$bw_f" ] && [ ! -L "$bw_f" ] || return 0
+    if [ -z "$BW_LIB" ] || ! command -v php >/dev/null 2>&1; then
+        echo "<INFO> $bw_f liess sich nicht auf autoshade/1 pruefen (php oder bw_lib.php fehlt) - der erste Takt stellt um."
+        return 0
+    fi
+    rm -f "$bw_f.neu" 2>/dev/null
+    bw_z=$(php -r 'require $argv[1]; $d = json_decode((string) @file_get_contents($argv[2]), true); if (!is_array($d)) { exit(3); } list($n, $z) = bw_befehl_uebergang($d); if (!$z) { exit(3); } $js = json_encode($n, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); if (!is_string($js) || $js === "") { exit(2); } umask(077); if (@file_put_contents($argv[2] . ".neu", $js) !== strlen($js)) { exit(2); } foreach ($z as $i) { echo bw_befehl_uebergang_zeile($i), "\n"; } exit(0);' "$BW_LIB" "$bw_f" 2>/dev/null)
+    bw_rc=$?
+    if [ "$bw_rc" -eq 3 ]; then
+        rm -f "$bw_f.neu" 2>/dev/null
+        return 0
+    fi
+    if [ "$bw_rc" -eq 0 ] && [ -n "$bw_z" ] && php -r 'require $argv[1]; $o = json_decode((string) @file_get_contents($argv[2]), true); $n = json_decode((string) @file_get_contents($argv[2] . ".neu"), true); if (!is_array($o)) { exit(1); } list($o, $z) = bw_befehl_uebergang($o); exit(is_array($n) && $n === $o ? 0 : 1);' "$BW_LIB" "$bw_f" >/dev/null 2>&1 \
+       && mv -f "$bw_f.neu" "$bw_f" 2>/dev/null; then
+        chmod 600 "$bw_f" 2>/dev/null
+        echo "$bw_z" | while IFS= read -r bw_zeile; do
+            [ -n "$bw_zeile" ] || continue
+            echo "<INFO> $bw_wo: $bw_zeile"
+            if [ "$bw_wo" = "Konfiguration" ] && [ -d "$BASE/log/plugins/$PFOLDER" ]; then
+                printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$bw_zeile" >> "$BASE/log/plugins/$PFOLDER/beschattung.log" 2>/dev/null
+            fi
+        done
+    else
+        rm -f "$bw_f.neu" 2>/dev/null
+        echo "<WARNING> autoshade/1 liess sich in $bw_f nicht auf auto umstellen - der erste Takt stellt um (es gilt schon jetzt auto)."
+    fi
+}
+case "$PFOLDER" in
+    ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - autoshade/1 nicht umgestellt (der erste Takt stellt um)." ;;
+    *)
+        bw_befehl_auto "$BASE/config/plugins/$PFOLDER/beschattung.json" "Konfiguration"
+        bw_befehl_auto "$BASE/config/plugins/$PFOLDER.backup.json" "Zweitschrift"
+        ;;
+esac
 echo "<OK> postupgrade abgeschlossen."
 echo "<INFO> Der Zaehler faengt nach einem Update wieder bei null an -"
 echo "<INFO> das Protokoll im Reiter Protokoll bleibt erhalten."
