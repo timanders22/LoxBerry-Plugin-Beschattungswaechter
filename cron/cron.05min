@@ -25,22 +25,41 @@ LAUF="REPLACELBPBINDIR/bw_lauf.php"
 # DIE FEHLERAUSGABE GEHT NACH cron.err (C5, Durchgang 30.09.2026; Bauform
 # Docker NG 1.3.7 und Abfahrts-Assistent 1.6.10). LoxBerry ruft jede
 # Cron-Datei mit "> /dev/null 2>&1" auf (am Geraet gelesen in
-# /etc/cron.d/lbdefaults). Bis 0.9.21 schickte diese Zeile auch die eigene
-# Fehlerausgabe dorthin - ein Fatal Error, eine fehlende Bibliothek oder ein
-# unbekannter Schalter verschwanden spurlos, obwohl bw_lauf.php Abbrueche
-# ausdruecklich auf stderr schreibt. Der Platzhalter in der Zeile ERR= wird
-# bei der Installation durch den Protokollordner des Plugins ersetzt.
-# Verzeichnis anlegen, sonst scheitert schon die Umlenkung; touch, weil ein
-# Anhaengen ohne Inhalt die Aenderungszeit nicht auffrischt (Regeln/06); ab
-# 256 kB auf die letzten 300 Zeilen gekappt - log/ liegt im Arbeitsspeicher.
-# Der Reiter Logdateien zeigt die Datei, sobald etwas darin steht.
+# /etc/cron.d/lbdefaults). Der Platzhalter in der Zeile ERR= wird bei der
+# Installation durch den Protokollordner des Plugins ersetzt. Ab 256 kB auf die
+# letzten 300 Zeilen gekappt - log/ liegt im Arbeitsspeicher. Der Reiter
+# Logdateien zeigt die Datei, sobald etwas darin steht.
 ERR="REPLACELBPLOGDIR/cron.err"
+#
+# SEIT 0.9.31 (Gruppe 23, B15; Bauform Abfahrt 1.6.32 / Ferien 1.2.29 plus
+# Root-Abwurf wie Docker NG 1.3.20):
+#   - ALS ROOT VON HAND GESTARTET, wird an loxberry abgegeben (su, dash-tauglich);
+#     gibt es den Benutzer nicht, laeuft nichts und nichts wird als root
+#     angelegt. Ein Handlauf als root legte bis 0.9.30 cron.err und lauf.lock
+#     root-eigen an - danach startete php nicht mehr (cron.err nicht
+#     beschreibbar) bzw. sendete der Takt nie wieder (Pruefbericht B15).
+#   - Laesst sich cron.err nicht anlegen oder beschreiben (touch scheitert),
+#     laeuft php trotzdem, die Fehlerausgabe geht dann mit nach /dev/null.
+#   - KEIN flock hier (N9): der Takt startet den Haus-Hoerer per proc_open, und
+#     ein Deskriptor dieser Datei ginge an ihn ueber (bis 420 s) und sperrte den
+#     naechsten Takt (Gedaechtnis "Sperre vererbt sich an Kinder"). Die
+#     PHP-Sperre lauf.lock reicht.
+if [ "$(id -u 2>/dev/null)" = "0" ]; then
+    if id loxberry >/dev/null 2>&1; then
+        exec su -s /bin/sh loxberry -c "\"$0\""
+    fi
+    echo "Beschattungswaechter: als root gestartet, einen Benutzer loxberry gibt es nicht - der Takt laeuft nicht." >&2
+    exit 1
+fi
 
 [ -f "$LAUF" ] || exit 0
 mkdir -p "$(dirname "$ERR")" 2>/dev/null
-touch "$ERR" 2>/dev/null
-if [ -f "$ERR" ] && [ "$(wc -c < "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
-    tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+if touch "$ERR" 2>/dev/null; then
+    if [ "$(wc -c < "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+        tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+    fi
+    /usr/bin/php "$LAUF" >/dev/null 2>>"$ERR"
+else
+    /usr/bin/php "$LAUF" >/dev/null 2>&1
 fi
-/usr/bin/php "$LAUF" >/dev/null 2>>"$ERR"
 exit 0

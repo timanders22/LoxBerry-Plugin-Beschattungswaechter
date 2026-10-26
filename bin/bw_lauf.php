@@ -25,10 +25,17 @@
  *                              leert die zurueckbehaltenen MQTT-Themen
  *                              (aus uninstall/uninstall)
  *   php bw_lauf.php --sonne-hoeren <kennung>
- *                              der Begleitprozess von Sonne-1 - startet der
- *                              Takt selbst (bw_sonne_hoerer_starten()), nur
- *                              mit dem Haken "Sonnenstand der Fensterbilanz
- *                              nutzen"; nicht von Hand aufrufen
+ *                              der Begleitprozess (seit 0.9.31 "Haus-Hoerer":
+ *                              Sonnenstand der Fensterbilanz UND Anwesenheit) -
+ *                              startet der Takt selbst (bw_sonne_hoerer_starten()),
+ *                              nur mit dem Haken "Sonnenstand der Fensterbilanz
+ *                              nutzen" oder "Wenn niemand zu Hause ist, das A
+ *                              frueher druecken"; nicht von Hand aufrufen
+ *
+ * SEIT 0.9.31 (Gruppe 23): jeder Takt schickt ALLE Themen ueber MQTT (N1,
+ * E-E9), nicht nur nach einem Befehl; im Zeitfenster wird alle 15 Minuten
+ * gezaehlt, auch ohne Befehl (B23); der Waechter der Befehlsbruecke laeuft
+ * hier im Fuenfminutentakt (E-E3).
  */
 
 /* Welche Lage gilt, entscheidet der eigene Ablageort, nicht die Reihenfolge
@@ -108,6 +115,17 @@ $c = bw_config();
    ab; ein anderes Praefix steht damit erst nach diesem Lauf wieder darin.
    Geschrieben wird nur, wenn sie abweicht. */
 bw_abo_datei(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '', true);
+/* DER WAECHTER DER BEFEHLSBRUECKE (Gruppe 23, V1, E-E3): im Fuenfminutentakt, VOR dem Start des Haus-Hoerers und vor
+   jeder Sperre - befehlsbruecke.sh schliesst geerbte Deskriptoren, der Dienst erbt lauf.lock nie. Er startet den
+   Dienst nur mit "Befehle ueber MQTT annehmen" und MQTT an, nie waehrend eines Updates, nach einem Start hoechstens
+   alle 600 s neu (Stammfassung 1.0.1). Nicht bei --probe (--mqtt-leeren und --sonne-hoeren enden oben). */
+if (!$bw_probe && bw_bruecke_laden()) {
+    try {
+        bb_waechter();
+    } catch (Throwable $bw_t) {
+        bw_log_wenn_neu('bruecke', 'Waechter der Befehlsbruecke: ' . get_class($bw_t) . ': ' . $bw_t->getMessage());
+    }
+}
 $stand = bw_stand_lesen();
 $letzte = isset($stand['letzte']) ? (int) $stand['letzte'] : 0;
 $alter = $letzte > 0 ? (time() - $letzte) : PHP_INT_MAX;
@@ -176,12 +194,35 @@ if (!$ziele) {
      Aussage wird gedrueckt wie bisher (Protokollzeile). Bleibt keines
      uebrig, ist das wie beim Wetter keine Stoerung (OK bleibt 1).
    Das Wetter fragt danach nur, wenn noch etwas zu druecken ist. */
+/* DER HAUS-HOERER (Gruppe 23, E-E5) laeuft mit Sonnenstand ODER Anwesenheit - und startet VOR den Wachen, damit die
+   Abwesenheit auch ausserhalb des Zeitfensters (etwa vor 06:00) zaehlt. Vor jeder Sperre. */
+if ((!empty($c['sonne_ein']) || !empty($c['anwesend_ein'])) && !$bw_jetzt && !$bw_probe) {
+    bw_sonne_hoerer_starten(__FILE__);
+}
+
+/* ANWESENHEIT (Gruppe 23, V3, E-E4), AB WERK AUS - Abschnitt L in bw_lib.php. Meldet der BLE-Scanner NG live
+   "niemand da" und ist die Frist um, drueckt dieser Takt EINMAL je Abwesenheit das A, auch wenn der Abstand noch
+   nicht um ist - nur eingeschaltet, im Zeitfenster und mit Ziel (die Wachen oben gelten; uebersprungen wird nur der
+   Abstand). Sonne und Wetter gelten danach weiter; halten sie zurueck, bleibt der Druck offen. Schweigt die Quelle
+   (Zaehler > 120 s) oder kommt "-", gilt das bisherige Verhalten. Nie bei --jetzt. */
+$bw_anw = null;
+$bw_anw_druck = false;
+if (!empty($c['anwesend_ein']) && !$bw_jetzt) {
+    $bw_anw = bw_anwesend_lage(bw_anwesend_lesen(), time(), (int) $c['anwesend_frist'] * 60);
+    if (bw_anwesend_faellig($bw_anw, $stand) && $ziele && !empty($c['aktiv']) && bw_im_fenster($c)) {
+        $grund = '';
+        $bw_anw_druck = true;
+    }
+    if (!$bw_probe && ($bw_anw[0] === 'schweigt' || $bw_anw[0] === 'ohne_aussage')) {
+        bw_log_wenn_neu('anwesend_schweigt', 'Anwesenheit: haus/anwesenheit '
+            . ($bw_anw[0] === 'schweigt' ? 'schweigt (Zaehler aelter als 120 s oder nie live gesehen)' : 'meldet keine Aussage (-)')
+            . ' - bisheriges Verhalten, das A kommt im Abstand.');
+    }
+}
+
 $bw_sonne = null;
 $bw_nachholen = false;
 if (!empty($c['sonne_ein']) && !$bw_jetzt) {
-    if (!$bw_probe) {
-        bw_sonne_hoerer_starten(__FILE__);
-    }
     if ($grund !== '' && $ziele && !empty($c['aktiv']) && bw_im_fenster($c)) {
         $bw_offen = bw_sonne_offene_ziele($stand, $ziele);
         if ($bw_offen) {
@@ -228,6 +269,11 @@ if ($bw_probe) {
         echo '  Sonne (Fensterbilanz' . ($bw_nachholen ? ', Nachholen' : '') . '): '
            . bw_sonne_protokollsatz($bw_sonne) . "\n";
     }
+    if ($bw_anw !== null) {
+        echo '  Anwesenheit: ' . ($bw_anw_druck
+            ? 'niemand seit ' . (int) floor((time() - $bw_anw[1]) / 60) . ' min - ein regulaerer Lauf drueckte jetzt einmal (Abwesenheit)'
+            : $bw_anw[0]) . "\n";
+    }
     if ($grund !== '') {
         echo '  Ein regulaerer Lauf taete jetzt nichts: ' . $grund . "\n";
     }
@@ -257,20 +303,37 @@ if ($grund !== '') {
        eine Messung offen ist. Dieselbe Sperre wie jeder Weg, der stand.json
        lesen-aendern-schreibend anfasst; ist sie belegt, misst der naechste
        Takt. */
-    if (bw_wirkung_offen($c, $stand)) {
+    /* B23 (Gruppe 23, Entscheidung 2, E-E8): im Zeitfenster bei eingeschaltetem Waechter und Haken "Die Wirkung
+       messen" alle 15 Minuten zaehlen, auch ohne Befehl - unter derselben Sperre, mit dem Stand UNTER der Sperre
+       frisch gelesen (B21), nur autoActive, Abbruch nach drei Fehlschlaegen in Folge oder 60 s. */
+    $bw_zfaellig = bw_zaehlen_faellig($c, $stand, time(), bw_im_fenster($c));
+    if (bw_wirkung_offen($c, $stand) || $bw_zfaellig) {
         $bw_nsperre = bw_sperre();
         if ($bw_nsperre !== false) {
-            bw_stand_schreiben(bw_wirkung_nachmessen($c, bw_stand_lesen()));
+            $bw_st = bw_stand_lesen();
+            if (bw_wirkung_offen($c, $bw_st)) {
+                $bw_st = bw_wirkung_nachmessen($c, $bw_st);
+            }
+            if (bw_zaehlen_faellig($c, $bw_st, time(), bw_im_fenster($c))) {
+                list($bw_zok, $bw_zmeldung, $bw_zerg) = bw_automatiken($c, 40, true, 60);
+                $bw_st = bw_zaehlung_eintragen($bw_st, $bw_zok, $bw_zerg);
+                if (!$bw_zok) {
+                    bw_log_wenn_neu('pruefen', 'Die Automatiken liessen sich nicht zaehlen: '
+                                             . strip_tags((string) $bw_zmeldung));
+                }
+            }
+            bw_stand_schreiben($bw_st);
             fclose($bw_nsperre);
             $stand = bw_stand_lesen();
         }
     }
     bw_lauf_schreiben(!$bw_stoerung && !bw_zaehlung_misslungen($c, $stand));
     bw_nach_update_merker_weg();
-    bw_mqtt_lebenszeichen($c);
-    /* Die drei Zustaende aktiv, ziele und fenster gehen auch ohne Befehl
-       hinaus, sobald sich einer aendert (M1). */
-    bw_mqtt_zustaende($c);
+    /* VOLLVERSAND IN JEDEM TAKT (Gruppe 23, N1, E-E9): ok, fehler, code, gesendet, scharf, automatiken und alter
+       standen ueber MQTT bis 0.9.30 bis zum naechsten Befehl still; unter Gateway V2 stuende ziele nach einem
+       Neustart des Miniservers bis zu 30 min auf 0. bw_mqtt_publish() traegt Zustaende und Lebenszeichen in EINER
+       Verbindung und fuehrt den Merker der drei Zustaende mit (M1). */
+    bw_mqtt_publish($c, $stand);
     bw_melden($c);
     echo "nichts zu tun: " . $grund . "\n";
     exit(0);
@@ -282,9 +345,32 @@ if ($grund !== '') {
    Sperre sofort. */
 $bw_sperre = bw_sperre();
 if ($bw_sperre === false) {
+    if (bw_sperre_lage() === 'rechte') {
+        /* N10 (Gruppe 23, B15): lauf.lock laesst sich nicht oeffnen - kein "anderer Lauf", sondern eine Stoerung.
+           OK und status/ok gehen auf 0, Befund und Healthcheck sagen "Sperrdatei nicht beschreibbar". */
+        bw_lauf_schreiben(false);
+        bw_mqtt_publish($c, $stand);
+        bw_melden($c);
+        echo "nichts zu tun: lauf.lock laesst sich nicht oeffnen (Rechte?) - siehe Protokoll\n";
+        exit(0);
+    }
     echo "nichts zu tun: ein anderer Lauf ist noch unterwegs\n";
     exit(0);
 }
+/* B21 (Gruppe 23): den Stand UNTER der Sperre frisch lesen. Hat in der Zwischenzeit (Sonne- und Wetterentscheidung,
+   Wetterabruf) der Endpunkt, die Bruecke oder der Knopf gesendet, endet der Takt hier - bis 0.9.30 ging deren Stand
+   verloren, und das A kam doppelt. --jetzt sendet trotzdem. */
+$bw_frisch = bw_stand_lesen();
+if (!$bw_jetzt && (isset($bw_frisch['letzte']) ? (int) $bw_frisch['letzte'] : 0) !== $letzte) {
+    fclose($bw_sperre);
+    bw_lauf_schreiben(!bw_zaehlung_misslungen($c, $bw_frisch));
+    bw_nach_update_merker_weg();
+    bw_mqtt_publish($c, $bw_frisch);
+    bw_melden($c);
+    echo "nichts zu tun: soeben gesendet (Endpunkt, Befehlsbruecke oder Knopf)\n";
+    exit(0);
+}
+$stand = $bw_frisch;
 
 $gut = 0;
 /* ZWEI CODES, NICHT EINER. Bis 0.9.12 stand hier ein unbedingtes
@@ -335,6 +421,12 @@ $stand = bw_wirkung_beginnen($stand, $bw_vorher, $ergebnisse);
 if ($bw_sonne !== null) {
     $stand = bw_sonne_stand_eintragen($stand, $bw_sonne, $bw_sonne_vorher, $bw_nachholen);
 }
+/* V3: der eine Druck dieser Abwesenheit ist mit diesem Sendelauf verbraucht (auch bei einem Teilerfolg; Fehlschlaege
+   wiederholt die 15-Minuten-Regel). Ein regulaerer Befehl waehrend der Abwesenheit verbraucht ihn ebenso. */
+if ($bw_anw !== null && bw_anwesend_faellig($bw_anw, $stand)) {
+    $stand['anwesend_a'] = (int) $bw_anw[1];
+    $stand['anwesend_a_ts'] = time();
+}
 
 /* Die Wirkung messen, nicht den Rueckgabewert - aber nur, wenn der Anwender
    es eingeschaltet hat, und hoechstens einmal je Viertelstunde: die Messung
@@ -342,7 +434,8 @@ if ($bw_sonne !== null) {
 if (!empty($c['pruefen_ein'])) {
     $letzte_pruefung = isset($stand['scharf_ts']) ? (int) $stand['scharf_ts'] : 0;
     if (time() - $letzte_pruefung >= 900) {
-        list($pok, $pmeldung, $perg) = bw_automatiken($c);
+        /* Gruppe 23 (E-E8): im Takt nur autoActive, Abbruch nach drei Fehlschlaegen in Folge oder 60 s. */
+        list($pok, $pmeldung, $perg) = bw_automatiken($c, 40, true, 60);
         /* Eine Stelle fuer alle drei Wege (C3): gelungen traegt die Werte
            ein, misslungen vermerkt den Fehlschlag - die Werte bleiben
            stehen, OK geht auf 0 (Frage 6/11). */
@@ -380,6 +473,12 @@ if ($bw_nachholen) {
     foreach ($ziele as $z) { $bw_nrs[] = (int) $z['nr']; }
     bw_log(sprintf('Sonne-1: A fuer Ziel %s nachgeholt (jetzt Sonne oder keine frische Aussage): '
                    . '%d von %d angenommen, HTTP %d', implode(', ', $bw_nrs), $gut, count($ziele), $code));
+}
+if ($bw_anw_druck) {
+    $bw_nrs = array();
+    foreach ($ziele as $z) { $bw_nrs[] = (int) $z['nr']; }
+    bw_log(sprintf('Anwesenheit: niemand seit %d min - A an Ziel %s (%d von %d angenommen, HTTP %d)',
+                   (int) floor((time() - $bw_anw[1]) / 60), implode(',', $bw_nrs), $gut, count($ziele), $code));
 }
 if ($bw_sonne !== null && ($bw_sonne['weg'] || $bw_sonne['ohne'])) {
     echo 'Sonne-1: ' . bw_sonne_protokollsatz($bw_sonne) . "\n";

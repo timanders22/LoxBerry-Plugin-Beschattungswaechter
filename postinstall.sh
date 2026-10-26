@@ -127,7 +127,9 @@ if [ "$UPGRADE" = "1" ]; then
         if [ "$LAGE_BK" -eq 0 ]; then
             # Kein cp -p: es braechte die Rechte der Sicherung mit (Regeln/06,
             # "chmod vor cp -p wirkungslos"). Neben dem Platz, dann umbenannt.
-            if ( umask 077 && cp "$BK" "$CF.neu" ) 2>/dev/null && mv -f "$CF.neu" "$CF"; then
+            # B5 (Gruppe 23): vor dem Umbenennen nachlesen - Bauart preupgrade.sh (cmp + bw_lage auf .neu).
+            if ( umask 077 && cp "$BK" "$CF.neu" ) 2>/dev/null && cmp -s "$BK" "$CF.neu" \
+               && { bw_lage "$CF.neu"; [ $? -eq 0 ]; } && mv -f "$CF.neu" "$CF"; then
                 # I3: Rechte NACH dem Zurueckspielen, auf Konfiguration UND
                 # Zweitschrift - beide tragen das Merkwort. Bis 0.9.21 stand
                 # chmod 600 vor dem cp -p, und die zurueckgespielte
@@ -224,6 +226,22 @@ fi
 if id loxberry >/dev/null 2>&1; then
     chown -R loxberry:loxberry "$PCONFIG" "$PLOG" "$PDATA" "$PBIN" 2>/dev/null
     [ -f "$BK" ] && chown loxberry:loxberry "$BK" 2>/dev/null
+fi
+
+# ---------- Befehlsbruecke (Gruppe 23, 0.9.31, V1, E-E3) ----------
+# Erst die Marke weg (die Bruecke startet nicht, solange eine frische Marke liegt; der trap raeumt sie ohnehin ab),
+# dann starten - befehlsbruecke.sh startet nur mit den Haken "Befehle ueber MQTT annehmen" und "Werte ueber MQTT
+# veroeffentlichen" (ab Werk aus bzw. bei einem Update unveraendert) und misst danach, ob der Dienst laeuft. Ob sie
+# laufen soll, sagt allein die Konfiguration; sonst versucht es der Fuenfminutentakt erneut. Bauart Ferien 1.2.28.
+rm -f "$MARKE" 2>/dev/null
+BBSH="$PBIN/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    BB_AUS=$(timeout 40 bash "$BBSH" start 2>&1 | head -n 1)
+    case "$BB_AUS" in
+        *gestartet*|*laeuft*) echo "<OK> Befehlsbruecke: $BB_AUS" ;;
+        "Haken aus - kein Start.") echo "<INFO> Befehlsbruecke: aus (Reiter MQTT, Haken 'Befehle ueber MQTT annehmen')." ;;
+        *) echo "<WARNING> Befehlsbruecke: $BB_AUS - der Fuenfminutentakt versucht es erneut." ;;
+    esac
 fi
 
 # Die Erstanleitung nur, wenn danach keine eingerichtete Konfiguration

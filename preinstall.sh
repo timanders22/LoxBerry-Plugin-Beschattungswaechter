@@ -37,7 +37,25 @@ fi
 case "$PFOLDER" in
     ''|*/*|*..*) echo "<WARNING> Unzulaessiger Ordnername '$PFOLDER' - nichts beiseitegelegt."; exit 0 ;;
 esac
-[ -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ] && exit 0
+# B18 (Gruppe 23, 0.9.31): ein Update erkennt nur eine GUELTIGE Marke - Inhalt Unix-Zeit aus preupgrade.sh, sonst die
+# Aenderungszeit; gilt bei -300 <= jetzt - t < 3600 (wie bw_marke_gilt() in bw_lib.php); laesst sich keine Zeit lesen,
+# gilt sie. Eine aeltere Marke stammt aus einem abgebrochenen Update - dann ist dies eine Neuinstallation. Bis 0.9.30
+# hielt jede liegengebliebene Marke den naechsten Einbau fuer ein Update (Pruefbericht B18).
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    MT=$(head -c 16 "$MARKE" 2>/dev/null | tr -d '[:space:]')
+    case "$MT" in ''|*[!0-9]*) MT=$(stat -c %Y "$MARKE" 2>/dev/null || echo 0) ;; esac
+    JETZT=$(date +%s)
+    if [ "${MT:-0}" -le 0 ] 2>/dev/null; then
+        exit 0
+    fi
+    MA=$((JETZT - MT))
+    if [ "$MA" -ge -300 ] && [ "$MA" -lt 3600 ]; then
+        exit 0
+    fi
+    echo "<WARNING> Eine Aktualisierungsmarke von $MA s liegt noch da (abgebrochenes Update?) - dieser Einbau gilt als Neuinstallation."
+    rm -f "$MARKE" 2>/dev/null
+fi
 
 BEISEITE=""
 FEST=""
@@ -46,9 +64,11 @@ for ZIEL in "$BASE/config/plugins/$PFOLDER.backup.json" \
             "$BASE/config/plugins/$PFOLDER.backup.json.kaputt" \
             "$BASE/config/plugins/$PFOLDER.mqtt_praefix_alt"; do
     if [ -e "$ZIEL" ] || [ -L "$ZIEL" ]; then
-        rm -f "${ZIEL:?}.alt" 2>/dev/null
+        # B3 (Gruppe 23): rm -rf - ein Ordner .alt liesse mv die Datei sonst HINEINschieben; chmod nur auf eine
+        # Datei, nie auf einen Symlink (Bauform Audi 0.9.30, Abfahrt 1.6.32, Marstek 1.1.27, Govee 0.9.31).
+        rm -rf "${ZIEL:?}.alt" 2>/dev/null
         if mv -f "$ZIEL" "$ZIEL.alt" 2>/dev/null; then
-            chmod 600 "$ZIEL.alt" 2>/dev/null
+            [ -f "$ZIEL.alt" ] && [ ! -L "$ZIEL.alt" ] && chmod 600 "$ZIEL.alt" 2>/dev/null
             BEISEITE="$BEISEITE $ZIEL.alt"
         else
             FEST="$FEST $ZIEL"

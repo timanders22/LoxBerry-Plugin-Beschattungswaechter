@@ -48,6 +48,15 @@
  *    Adresse steht sofort da; die Wiederholung wird gezaehlt, nicht
  *    geschrieben.
  *
+ * 5. DER LESEZWEIG HAENGT AM HAKEN endpunkt_ein (seit 0.9.31, Gruppe 23,
+ *    E-E13): status und json antworten nur mit "HTTP-Lesezweig fuer Loxone
+ *    annehmen" (ab Werk aus, nach einem Update an), sonst 403
+ *    ERR=ENDPUNKT_AUS - VOR der Merkwortpruefung, damit auch ein falsches
+ *    Merkwort nichts verraet. jetzt, pruefen und selftest bleiben hinter dem
+ *    Merkwort (der alte Befehlsweg; der Reiter Test misst den Selbsttest).
+ *    Neue Anlagen bekommen die Werte ueber MQTT und geben Befehle ueber die
+ *    Befehlsbruecke.
+ *
  * (c) Beschattungswaechter Plugin Authors - MIT-Lizenz
  */
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
@@ -111,6 +120,18 @@ function bw_par($name)
 }
 
 $bw_cfg = bw_config(false);
+/* Das Tor des Lesezweigs (Festlegung 5): vor der Merkwortpruefung, nur status und json (ohne aktion = status),
+   erkannt am WERT von selftest wie unten (?selftest=0 faellt nicht daran vorbei in den Lesezweig). */
+$bw_a0 = bw_par('aktion');
+if ($bw_a0 === '') { $bw_a0 = 'status'; }
+if (($bw_a0 === 'status' || $bw_a0 === 'json') && bw_par('selftest') !== '1'
+        && (int) (isset($bw_cfg['endpunkt_ein']) ? $bw_cfg['endpunkt_ein'] : 0) !== 1) {
+    if ($bw_a0 === 'json') {
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    bw_ende(403, ($bw_a0 === 'json' ? '{"OK":0,"ERR":"ENDPUNKT_AUS"}' : 'BW;OK=0;ERR=ENDPUNKT_AUS'),
+            'Lesezweig aus (Haken endpunkt_ein)', 'endpunkt_aus');
+}
 $bw_soll = isset($bw_cfg['aktionstoken']) ? trim((string) $bw_cfg['aktionstoken']) : '';
 $bw_ist = bw_par('token');
 $bw_selftest = bw_par('selftest') === '1';
@@ -176,101 +197,46 @@ if ($bw_aktion === 'jetzt') {
     /* Der Anlass statt der Uhr: Loxone loest im Augenblick aus, in dem die
        Beschattungsfreigabe kommt, statt bis zu sechzig Minuten spaeter. Das
        Zeitfenster und der Abstand gelten hier bewusst NICHT - wer den Befehl
-       schickt, meint ihn.
+       schickt, meint ihn. DER HAUPTSCHALTER GILT (seit 0.9.13).
      *
-     * DER HAUPTSCHALTER GILT SEHR WOHL. Bis 0.9.12 stand hier nur die
-     * Zielpruefung: ein im Reiter Einstellungen abgeschaltetes Plugin sendete
-     * weiter, sobald der virtuelle Ausgang feuerte. Der Kommentar
-     * rechtfertigte ausdruecklich nur Fenster und Abstand - "aus" war nie
-     * gemeint, es stand nur nirgends. */
-    if (empty($bw_cfg['aktiv'])) {
+     * SEIT 0.9.31 (Gruppe 23, E-E2) EINE Stelle mit dem Knopf und der
+     * Befehlsbruecke: bw_aktion_jetzt() - Hauptschalter, Ziele, Sperre
+     * lauf.lock, Stand unter der Sperre frisch, Rechnung
+     * bw_stand_nach_senden(), Lebenszeichen ohne Takt, MQTT sofort. Die
+     * Antworten sind dieselben wie bis 0.9.30. */
+    $bw_r = bw_aktion_jetzt($bw_cfg, 'http');
+    if ($bw_r['fehler'] === 'ABGESCHALTET') {
         bw_ende(409, 'BW;OK=0;ERR=ABGESCHALTET', 'jetzt: das Plugin ist abgeschaltet');
     }
-    $bw_ziele = bw_ziele($bw_cfg);
-    if (!$bw_ziele) {
+    if ($bw_r['fehler'] === 'KEIN_ZIEL') {
         bw_ende(409, 'BW;OK=0;ERR=KEIN_ZIEL', 'jetzt: kein Ziel eingerichtet');
     }
-    /* DIESELBE SPERRE WIE IM CRON-LAUF. Beide Wege fassen stand.json
-       lesen-aendern-schreibend an; ohne die Sperre gehen bei Ueberschneidung
-       die Zaehler verloren (die Datei selbst bleibt heil, dafuer sorgt
-       bw_json_schreiben). Sie ist nicht blockierend: wer nicht drankommt,
-       bekommt eine Antwort und keine Wartezeit. */
-    $bw_lock = bw_sperre();
-    if ($bw_lock === false) {
-        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'jetzt: ein anderer Lauf ist noch unterwegs');
+    if ($bw_r['fehler'] === 'BESETZT') {
+        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'jetzt: ein anderer Lauf ist noch unterwegs (' . $bw_r['grund'] . ')');
     }
-    $bw_gut = 0;
-    $bw_ergebnisse = array();
-    /* Die Positionen VOR dem Befehl (b1) - null, wenn die Wirkungsmessung aus ist. */
-    $bw_vorher = bw_wirkung_vorher($bw_cfg);
-    foreach ($bw_ziele as $bw_z) {
-        $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
-        $bw_ergebnisse[] = $bw_r;
-        if ($bw_r['ok']) { $bw_gut++; }
-    }
-    /* Der Stand kommt aus derselben Rechnung wie im Lauf und am Knopf der
-       Oberflaeche (C2, Durchgang 30.09.2026): der Code des ERSTEN
-       Fehlschlags, letzte_ok nur, wenn ALLE Ziele angenommen haben. Bis
-       0.9.21 galt letzte_ok hier schon bei einem Teilerfolg. */
-    $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
-    $bw_st = bw_wirkung_beginnen($bw_st, $bw_vorher, $bw_ergebnisse);
-    $bw_code = (int) $bw_st['code'];
-    bw_stand_schreiben($bw_st);
-    /* takt = false: der Endpunkt sagt etwas ueber den Erfolg DIESES Befehls
-       und nichts darueber, ob der Fuenfminutenlauf noch geht. Zeitstempel und
-       Zaehler bleiben deshalb stehen - siehe bw_lauf_schreiben(). */
-    bw_lauf_schreiben($bw_gut === count($bw_ziele) && !bw_zaehlung_misslungen($bw_cfg, $bw_st), false);
-    /* Ein Ausloeser meldet SOFORT, nicht beim naechsten Cron. Ueber HTTP
-       holt der Miniserver den Wert beim naechsten Abruf ab; ueber MQTT muss
-       ihn das Plugin schicken - sonst sieht ein Test, der erst eine Minute
-       spaeter wirkt, aus wie einer, der nicht wirkt. */
-    bw_mqtt_publish($bw_cfg, $bw_st);
-    bw_ende($bw_gut === count($bw_ziele) ? 200 : 502,
-            bw_statuszeile($bw_cfg, $bw_st),
-            'jetzt: ' . $bw_gut . ' von ' . count($bw_ziele) . ' Zielen, HTTP ' . $bw_code);
+    $bw_st = is_array($bw_r['stand']) ? $bw_r['stand'] : bw_stand_lesen();
+    bw_ende($bw_r['ok'] ? 200 : 502, bw_statuszeile($bw_cfg, $bw_st),
+            'jetzt: ' . $bw_r['gut'] . ' von ' . $bw_r['n'] . ' Zielen, HTTP ' . (int) (isset($bw_st['code']) ? $bw_st['code'] : 0)
+            . ($bw_r['fehler'] === 'FRIST' || strpos($bw_r['grund'], 'Frist') === 0 ? ' - ' . $bw_r['grund'] : ''));
 }
 
 if ($bw_aktion === 'pruefen') {
-    if (empty($bw_cfg['pruefen_ein'])) {
-        /* Ab Werk aus - und das wird gesagt, nicht stillschweigend als 0
-           beantwortet. Eine 0 saehe aus wie ein Messwert. */
+    /* Ab Werk aus - und das wird gesagt, nicht stillschweigend als 0 beantwortet. DIE VIERTELSTUNDE WIRD ERZWUNGEN:
+       eine Messung ist hoechstens 900 s alt, sonst kommt die letzte zurueck. Seit 0.9.31 EINE Stelle mit Knopf und
+       Befehlsbruecke: bw_aktion_pruefen() (Sperre, Stand frisch, Fehlschlag vermerkt - C3). */
+    $bw_r = bw_aktion_pruefen($bw_cfg, 'http');
+    if ($bw_r['fehler'] === 'PRUEFEN_AUS') {
         bw_ende(409, 'BW;OK=0;ERR=PRUEFEN_AUS', 'pruefen: abgeschaltet');
     }
-    /* DIE VIERTELSTUNDE WIRD ERZWUNGEN, NICHT NUR ZUGESAGT.
-     *
-     * Ein Aufruf erzeugt bis zu 1 + 3x40 = 121 nacheinander laufende Abrufe
-     * an den Miniserver, jeder mit der eingestellten Frist. Der Cron-Lauf hat
-     * diese Bremse seit jeher (bw_lauf.php); der Endpunkt hatte sie nicht,
-     * obwohl der Kommentar in der Loxone-Vorlage dem Anwender "nicht oefter
-     * als alle 15 Minuten" zusagt. Eine Zusage, die niemand einhaelt, ist
-     * keine. Die letzte Messung wird zurueckgegeben - sie ist hoechstens eine
-     * Viertelstunde alt und damit dasselbe, was der Cron-Lauf liefern
-     * wuerde. */
-    $bw_st = bw_stand_lesen();
-    $bw_letzte_pruefung = isset($bw_st['scharf_ts']) ? (int) $bw_st['scharf_ts'] : 0;
-    if (time() - $bw_letzte_pruefung < 900) {
-        bw_ende(200, bw_statuszeile($bw_cfg, $bw_st),
-                'pruefen: letzte Messung ist ' . (time() - $bw_letzte_pruefung)
-                . ' s alt, nicht neu gemessen');
+    if ($bw_r['fehler'] === 'BESETZT') {
+        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'pruefen: ein anderer Lauf ist noch unterwegs (' . $bw_r['grund'] . ')');
     }
-    /* Dieselbe Sperre wie bei jetzt: die Messung haelt einen Webserver-
-       Arbeiter lange fest, und der Cron-Lauf misst dasselbe. */
-    $bw_lock = bw_sperre();
-    if ($bw_lock === false) {
-        bw_ende(409, 'BW;OK=0;ERR=BESETZT', 'pruefen: ein anderer Lauf ist noch unterwegs');
+    if (!$bw_r['neu']) {
+        bw_ende(200, bw_statuszeile($bw_cfg, $bw_r['stand']), 'pruefen: ' . $bw_r['grund']);
     }
-    list($bw_ok, $bw_meldung, $bw_erg) = bw_automatiken($bw_cfg);
-    /* Auch der Fehlschlag wird eingetragen (C3, Frage 6/11): die gezaehlten
-       Werte bleiben stehen, OK geht auf 0, bis eine Zaehlung wieder gelingt.
-       Bis 0.9.21 blieb ein Fehlschlag hier ohne jede Spur im Stand. */
-    $bw_st = bw_zaehlung_eintragen(bw_stand_lesen(), $bw_ok, $bw_erg);
-    bw_stand_schreiben($bw_st);
-    if (!$bw_ok) {
-        bw_mqtt_publish($bw_cfg, $bw_st);
-        bw_ende(502, 'BW;OK=0;ERR=PRUEFEN_MISSLUNGEN',
-                'pruefen misslungen: ' . strip_tags((string) $bw_meldung));
+    if (!$bw_r['ok']) {
+        bw_ende(502, 'BW;OK=0;ERR=PRUEFEN_MISSLUNGEN', 'pruefen ' . $bw_r['grund']);
     }
-    bw_mqtt_publish($bw_cfg, $bw_st);
-    bw_ende(200, bw_statuszeile($bw_cfg, $bw_st),
-            'pruefen: ' . $bw_erg['scharf'] . ' von ' . $bw_erg['gesamt'] . ' Automatiken scharf');
+    bw_ende(200, bw_statuszeile($bw_cfg, $bw_r['stand']),
+            'pruefen: ' . $bw_r['erg']['scharf'] . ' von ' . $bw_r['erg']['gesamt'] . ' Automatiken scharf');
 }

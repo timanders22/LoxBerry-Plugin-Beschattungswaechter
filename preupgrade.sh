@@ -75,6 +75,13 @@ else
     exit 2
 fi
 
+# Gruppe 23 (0.9.31, V1): die Befehlsbruecke vor dem Austausch der Dateien anhalten. Die Marke liegt schon - der Waechter
+# im Fuenfminutentakt startet sie bis postinstall.sh nicht neu. Bis 0.9.30 gab es keine Bruecke (dann fehlt die Datei).
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    echo "<INFO> Befehlsbruecke: $(timeout 40 bash "$BBSH" stop 2>&1 | head -n 1)"
+fi
+
 # DIE KONFIGURATION WIRD MIT DEM JSON-LESER GEPRUEFT, nicht mit grep (I2,
 # Durchgang 30.09.2026). Bis 0.9.21 stand hier eine Textsuche nach "uuid" und
 # "aktionstoken": eine abgeschnittene Datei, in der beide noch standen, galt
@@ -153,5 +160,13 @@ case "$LAGE_CF" in
         echo "<WARNING> Die Sicherung $BK bleibt unveraendert."
         ;;
 esac
+# Gruppe 23 (0.9.31, E-E12): neue Anlagen senden ab Werk ueber MQTT; eine bestehende behaelt ihren Wert. Ist MQTT in
+# dieser Anlage aus (Schluessel 0 - oder er fehlt in einer Datei mit Inhalt: Lese-Regel bw_uebergang()), ein Hinweis.
+if [ -f "$CF" ] && [ -n "$BW_LIB" ] && command -v php >/dev/null 2>&1; then
+    php -r 'require $argv[1]; $d = json_decode((string) @file_get_contents($argv[2]), true); if (!is_array($d)) { exit(1); } $m = array_key_exists("mqtt_ein", $d) ? (string) $d["mqtt_ein"] : (bw_hat_inhalt($d) ? "0" : "1"); exit($m === "0" ? 0 : 1);' "$BW_LIB" "$CF" >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "<INFO> MQTT ist in dieser Anlage aus. Neue Anlagen senden ab 0.9.31 ab Werk ueber MQTT - einschalten im Reiter MQTT (empfohlen; der HTTP-Endpunkt bleibt)."
+    fi
+fi
 echo "<OK> preupgrade abgeschlossen."
 exit 0

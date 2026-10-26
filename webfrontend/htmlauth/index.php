@@ -7,6 +7,10 @@
  *
  * (c) Beschattungswaechter Plugin Authors - MIT-Lizenz
  */
+/* B10 (Gruppe 23, Bauform Marstek M2): keine PHP-Meldung in die Seite oder in einen Download - am Geraet steht
+   display_errors ohnehin auf Off; Meldungen gehen ins Fehlerprotokoll des Webservers. */
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
 
 /* ==================================================================
  * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
@@ -88,6 +92,11 @@ if (in_array(bw_eingabe($_POST, 'activetab'), $bw_reiter, true)) {
 } elseif (in_array('tab-' . bw_eingabe($_GET, 'form'), $bw_reiter, true)) {
     $bw_tab = 'tab-' . bw_eingabe($_GET, 'form');
 }
+/* B1 (Gruppe 23, wie Docker D22) und N16: gemessen wird im Reiter Test nur, wenn er AUSDRUECKLICH angefordert ist
+   (GET index.php?form=test) - nicht nach jedem POST aus dem Reiter (activetab) und nicht beim Umschalten im Browser.
+   Das Reiter-JS laedt den Reiter Test deshalb neu, statt ihn nur einzublenden. */
+$bw_test_offen = (bw_eingabe($_GET, 'form') === 'test'
+                  && (!isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'POST'));
 
 /* ---------- Eingaben verarbeiten ----------------------------------------- */
 $bw_cfg = bw_config();
@@ -169,8 +178,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         $bw_beanstandet[] = 'ms_nr';
     }
 
+    /* B9 (Gruppe 23): wetter_token wird unten eigens behandelt (Passwortfeld); anwesend_frist (V3) ist neu. */
     $bw_felderliste = array('uuid', 'befehl', 'von', 'bis', 'abstand',
-                            'wetter_token', 'sonne_min', 'wind_max', 'fassade');
+                            'sonne_min', 'wind_max', 'fassade', 'anwesend_frist');
     for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
         $bw_felderliste[] = 'uuid' . $bw_i;
         $bw_felderliste[] = 'befehl' . $bw_i;
@@ -191,29 +201,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
                 $bw_nr = substr($bw_f, strlen($bw_grund));
                 $bw_bez .= ' (' . bw_t('TEXT.ZIEL') . ' ' . ($bw_nr !== '' ? $bw_nr : '1') . ')';
             }
-            /* Das Wortzeichen der Ecowitt-Weiche erscheint nie in einer
-               Meldung, nur seine Laenge (Wetter-1). */
-            $bw_zeige = ($bw_f === 'wetter_token' && is_string($bw_w))
-                ? sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($bw_w)) : bw_kurz($bw_w);
             $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'),
-                                   bw_e($bw_bez), bw_e($bw_zeige));
+                                   bw_e($bw_bez), bw_e(bw_kurz($bw_w)));
             $bw_beanstandet[] = $bw_f;
+        }
+    }
+    /* B9 (Gruppe 23, E-E16; Form Sprachmodul 1.1.4 :2133-2150): das Wortzeichen der Ecowitt-Weiche ist ein
+       Passwortfeld ohne Wert. Leer heisst behalten, der Haken "Wortzeichen loeschen" leert es, Haken UND neuer Wert
+       ist ein Widerspruch. In keiner Meldung steht das Wortzeichen, nur seine Laenge; nach einer Beanstandung reist es
+       nie mit (X-2). Ein gespeichertes Wortzeichen bleibt beim Update stehen. */
+    $bw_tok_roh = isset($_POST['wetter_token']) ? $_POST['wetter_token'] : '';
+    $bw_tok_weg = !empty($_POST['wetter_token_loeschen']);
+    if (!is_string($bw_tok_roh)) {
+        $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'), bw_e(bw_t('TEXT.L_WETTER_TOKEN')), bw_e(bw_kurz($bw_tok_roh)));
+        $bw_beanstandet[] = 'wetter_token';
+    } else {
+        $bw_tok_neu = trim($bw_tok_roh);
+        if ($bw_tok_weg && $bw_tok_neu !== '') {
+            $bw_fehler[] = bw_t('TEXT.TOKEN_LOESCHEN_WIDERSPRUCH');
+            $bw_beanstandet[] = 'wetter_token';
+        } elseif ($bw_tok_weg) {
+            $bw_neu['wetter_token'] = '';
+        } elseif ($bw_tok_neu !== '' && bw_wert_pruefen('wetter_token', $bw_tok_neu)) {
+            $bw_neu['wetter_token'] = $bw_tok_neu;
+        } elseif ($bw_tok_neu !== '') {
+            $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'), bw_e(bw_t('TEXT.L_WETTER_TOKEN')),
+                                   bw_e(sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($bw_tok_roh))));
+            $bw_beanstandet[] = 'wetter_token';
         }
     }
     $bw_neu['pruefen_ein'] = empty($_POST['pruefen_ein']) ? 0 : 1;
     $bw_neu['wetter_ein'] = empty($_POST['wetter_ein']) ? 0 : 1;
     $bw_neu['sonne_ein'] = empty($_POST['sonne_ein']) ? 0 : 1;
+    $bw_neu['anwesend_ein'] = empty($_POST['anwesend_ein']) ? 0 : 1;
     /* EINE HALB AUSGEFUELLTE ZEILE WIRD GENANNT, NICHT UEBERGANGEN.
        Seit 0.9.13 darf der Befehl eines weiteren Ziels leer sein - so raeumt
        man es aus. Steht dann aber noch eine Kennung da, wird diese Zeile
        stillschweigend nicht gesendet (bw_ziele zaehlt nur vollstaendige
        Ziele), und der Bediener saehe nichts als eine Zeile, die nichts tut. */
-    for ($bw_i = 2; $bw_i <= 6; $bw_i++) {
-        $bw_hu = isset($bw_neu['uuid' . $bw_i]) ? trim((string) $bw_neu['uuid' . $bw_i]) : '';
-        $bw_hb = isset($bw_neu['befehl' . $bw_i]) ? trim((string) $bw_neu['befehl' . $bw_i]) : '';
+    /* B2 (Gruppe 23): beide Richtungen. "Kennung leer, Befehl gefuellt" ist halb - AUSSER der Befehl ist der
+       Werksbefehl der Zeile (N2: die Ziele 2-6 tragen ab Werk autoshade/1 ohne Kennung; sonst beanstandete jedes
+       Speichern einer Neuinstallation). Eine Fassade an einem Ziel ohne Kennung wird gespeichert und genannt. */
+    $bw_werk = bw_vorgaben();
+    for ($bw_i = 1; $bw_i <= 6; $bw_i++) {
+        $bw_s = ($bw_i === 1) ? '' : (string) $bw_i;
+        $bw_hu = isset($bw_neu['uuid' . $bw_s]) ? trim((string) $bw_neu['uuid' . $bw_s]) : '';
+        $bw_hb = isset($bw_neu['befehl' . $bw_s]) ? trim((string) $bw_neu['befehl' . $bw_s]) : '';
+        $bw_hf = isset($bw_neu['fassade' . $bw_s]) ? trim((string) $bw_neu['fassade' . $bw_s]) : '';
         if ($bw_hu !== '' && $bw_hb === '') {
             $bw_fehler[] = sprintf(bw_t('TEXT.ZIEL_HALB'), $bw_i);
-            $bw_beanstandet[] = 'befehl' . $bw_i;
+            $bw_beanstandet[] = 'befehl' . $bw_s;
+        } elseif ($bw_hu === '' && $bw_hb !== '' && $bw_hb !== $bw_werk['befehl' . $bw_s]) {
+            $bw_fehler[] = sprintf(bw_t('TEXT.ZIEL_HALB_A'), $bw_i);
+            $bw_beanstandet[] = 'uuid' . $bw_s;
+        }
+        if ($bw_hu === '' && $bw_hf !== '') {
+            $bw_meldungen[] = sprintf(bw_t('TEXT.ZIEL_FASSADE_OHNE'), $bw_i);
         }
     }
     if ($bw_beanstandet) {
@@ -227,9 +270,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
            naechsten Befehl - bis 0.9.21 stand nach dem Abschalten ueber MQTT
            weiter aktiv 1 im Broker. */
         bw_mqtt_zustaende($bw_cfg, true);
-        /* Sonne-1: ausgeschaltet - der Begleitprozess endet binnen einer
-           Sekunde, nicht erst mit seiner Hoechstdauer. */
-        if (empty($bw_cfg['sonne_ein'])) {
+        /* Sonne-1 und Anwesenheit (Gruppe 23): beide aus - der Haus-Hoerer endet binnen einer Sekunde, nicht erst mit
+           seiner Hoechstdauer. */
+        if (empty($bw_cfg['sonne_ein']) && empty($bw_cfg['anwesend_ein'])) {
             bw_sonne_hoerer_abmelden();
         }
     } else {
@@ -245,6 +288,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
     $bw_neu = $bw_cfg;
     $bw_neu['mqtt_ein'] = empty($_POST['mqtt_ein']) ? 0 : 1;
+    /* V1 (Gruppe 23): "Befehle ueber MQTT annehmen" - ab Werk aus, wirkt nur mit MQTT an. */
+    $bw_neu['befehle_mqtt_ein'] = empty($_POST['befehle_mqtt_ein']) ? 0 : 1;
     $bw_th_roh = isset($_POST['mqtt_thema']) ? $_POST['mqtt_thema'] : '';
     $bw_th = bw_eingabe($_POST, 'mqtt_thema');
     /* LEER IST EINE BEANSTANDUNG, KEINE VORGABE (Entscheidung 19, B-Nachzug
@@ -281,6 +326,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
         $bw_meldungen = array_merge($bw_meldungen, $bw_nach['ok']);
         $bw_fehler = array_merge($bw_fehler, $bw_nach['fehler']);
         bw_mqtt_zustaende($bw_cfg, true);
+        /* V1 (Gruppe 23): die Befehlsbruecke sofort schalten (bw_bruecke_schalten()) - der Waechter im Takt startet
+           nach einem Start hoechstens alle 600 s neu. */
+        list($bw_bm_ok, $bw_bm_f) = bw_bruecke_meldungen(bw_bruecke_schalten($bw_cfg));
+        $bw_meldungen = array_merge($bw_meldungen, $bw_bm_ok);
+        $bw_fehler = array_merge($bw_fehler, $bw_bm_f);
+    } else {
+        $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
+    }
+}
+
+/* ---------------- Der HTTP-Lesezweig (Gruppe 23, E-E13) ----------------
+ *
+ * Eigenes Formular 'endpunkt' im Reiter Einbindung, Abschnitt "Bestehende Anlagen". Ab Werk aus, nach einem Update an.
+ * jetzt/pruefen mit Merkwort wirken unabhaengig davon. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_endpunkt'])) {
+    $bw_neu = $bw_cfg;
+    $bw_neu['endpunkt_ein'] = empty($_POST['endpunkt_ein']) ? 0 : 1;
+    if (bw_config_speichern($bw_neu)) {
+        $bw_cfg = bw_config();
+        $bw_meldungen[] = bw_t('TEXT.GESPEICHERT');
+        bw_log('HTTP-Lesezweig des Endpunkts ' . (!empty($bw_cfg['endpunkt_ein']) ? 'eingeschaltet' : 'ausgeschaltet') . '.');
     } else {
         $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
     }
@@ -308,7 +374,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['token_neu'])) {
  * Ein Download-Handler steht IMMER vor lbheader(). Unter dem PHP-CLI ist der
  * Fehler unsichtbar - dort ist header() wirkungslos -, und auf der Anlage
  * bekommt der Bediener eine Seite mit angehaengtem XML statt einer Datei. */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && bw_eingabe($_POST, 'vorlage') === 'befehle') {
+    /* V1 (Gruppe 23): die Vorlage der MQTT-Befehle (bb_vorlage(), eigener Ausgang an den UDP-Eingang des Gateways) -
+       ohne Merkwort, sie traegt keines. */
+    $bw_vb = bw_vorlage_befehle();
+    if ($bw_vb === null) {
+        list(, $bw_vb_grund) = bw_bruecke_liste();
+        $bw_fehler[] = bw_e(sprintf(bw_t('BEFEHL.NICHT_LADBAR'), $bw_vb_grund));
+    } else {
+        while (ob_get_level() > 0) { ob_end_clean(); }
+        header('Content-Type: application/x-download');
+        header('Content-Disposition: attachment; filename="' . $bw_vb[0] . '"');
+        echo $bw_vb[1];
+        exit;
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
     $bw_art = (isset($_POST['vorlage']) && is_string($_POST['vorlage'])
                && $_POST['vorlage'] === 'out') ? 'out' : 'in';
     $bw_vtoken = trim((string) (isset($bw_cfg['aktionstoken']) ? $bw_cfg['aktionstoken'] : ''));
@@ -331,6 +411,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorlage'])) {
     } elseif (!$bw_wohl) {
         $bw_fehler[] = bw_t('TEXT.VORLAGE_KAPUTT');
     } else {
+        while (ob_get_level() > 0) { ob_end_clean(); }
         header('Content-Type: application/x-download');
         header('Content-Disposition: attachment; filename="' . $bw_dname . '"');
         echo $bw_inhalt;
@@ -379,28 +460,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rest_weg'])
 /* ---------------- Die Automatiken jetzt zaehlen ---------------- */
 $bw_zaehlung = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['zaehlen'])) {
-    /* DIESELBE SPERRE WIE DER TAKT (a1, Verbesserungsbau 30.09.2026). Takt
-       und Endpunkt (aktion=pruefen) zaehlen nur unter lauf.lock; bis 0.9.23
-       zaehlte dieser Knopf ohne sie. Lief der Takt gerade, fragte der Knopf
-       den Miniserver ein zweites Mal ab (bis zu 1 + 3x40 Abrufe) und konnte
-       dessen gleichzeitig geschriebenen Stand ueberschreiben. Nicht
-       blockierend wie "Befehl jetzt senden": wer nicht drankommt, bekommt eine
-       Meldung - gezaehlt und geschrieben wird dann nichts. Der Stand wird erst
-       unter der Sperre gelesen. */
-    $bw_zlock = bw_sperre();
-    if ($bw_zlock === false) {
+    /* DIESELBE SPERRE WIE DER TAKT (a1), seit 0.9.31 EINE Stelle mit Endpunkt und Befehlsbruecke:
+       bw_aktion_pruefen($c, 'knopf') - zaehlt sofort (ohne die Viertelstunde) und mit allen drei Zustaenden, damit der
+       Grund lesbar ist; ein Fehlschlag wird vermerkt (C3), die Werte gehen sofort ueber MQTT hinaus. */
+    $bw_pr = bw_aktion_pruefen($bw_cfg, 'knopf');
+    if ($bw_pr['fehler'] === 'BESETZT') {
         $bw_fehler[] = bw_t('TEXT.BESETZT_ZAEHLEN');
+    } elseif ($bw_pr['fehler'] === 'PRUEFEN_AUS') {
+        $bw_fehler[] = bw_t('TEXT.ZAEHLEN_AUS');
+    } elseif ($bw_pr['ok']) {
+        $bw_zaehlung = $bw_pr['erg'];
     } else {
-        list($bw_zok, $bw_zmeldung, $bw_zerg) = bw_automatiken($bw_cfg);
-        /* Eine Stelle fuer alle drei Wege (C3): ein Fehlschlag wird vermerkt, die
-           gezaehlten Werte bleiben stehen, OK geht auf 0. */
-        bw_stand_schreiben(bw_zaehlung_eintragen(bw_stand_lesen(), $bw_zok, $bw_zerg));
-        fclose($bw_zlock);
-        if ($bw_zok) {
-            $bw_zaehlung = $bw_zerg;
-        } else {
-            $bw_fehler[] = $bw_zmeldung;
-        }
+        $bw_fehler[] = $bw_pr['meldung'];
     }
 }
 
@@ -408,19 +479,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['zaehlen'])) {
 $bw_ergebnisse = array();
 if ($_SERVER['REQUEST_METHOD'] === 'POST'
         && (isset($_POST['jetzt']) || isset($_POST['trocken']))) {
-    $bw_ist_probe = isset($_POST['trocken']);
-    /* DIESELBE SPERRE WIE DER LAUF UND DER ENDPUNKT (C2, Durchgang
-       30.09.2026). Bis 0.9.21 sendete der Knopf ohne Sperre und konnte einen
-       gleichzeitigen Stand des Takts ueberschreiben. Die Probe sendet nichts
-       und schreibt nichts - sie braucht keine. */
-    $bw_lock = $bw_ist_probe ? true : bw_sperre();
-    if ($bw_lock === false) {
-        $bw_fehler[] = bw_t('TEXT.BESETZT');
-    } else {
-        /* Die Positionen VOR dem Befehl (b1) - nicht bei der Probe, und null,
-           wenn die Wirkungsmessung aus ist. */
-        $bw_vorher = $bw_ist_probe ? null : bw_wirkung_vorher($bw_cfg);
-        if ($bw_ist_probe) { bw_trocken(true); }
+    if (isset($_POST['trocken'])) {
+        /* Die Probe sendet nichts und schreibt nichts - sie braucht keine Sperre. */
+        bw_trocken(true);
         try {
             foreach (bw_ziele($bw_cfg) as $bw_z) {
                 $bw_r = bw_senden($bw_cfg, $bw_z['uuid'], $bw_z['befehl']);
@@ -436,25 +497,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
         }
         if (!$bw_ergebnisse) {
             $bw_fehler[] = bw_t('TEXT.KEIN_ZIEL');
-        } elseif (!$bw_ist_probe) {
-            $bw_gut = 0;
-            foreach ($bw_ergebnisse as $bw_r) { if ($bw_r['ok']) { $bw_gut++; } }
-            /* Der Stand aus derselben Rechnung wie Lauf und Endpunkt (C2): der
-               Code des ERSTEN Fehlschlags statt des letzten Ziels, letzte_ok
-               nur, wenn alle Ziele angenommen haben. */
-            $bw_st = bw_stand_nach_senden(bw_stand_lesen(), $bw_ergebnisse);
-            $bw_st = bw_wirkung_beginnen($bw_st, $bw_vorher, $bw_ergebnisse);
-            bw_stand_schreiben($bw_st);
-            /* takt = false: der Knopf im Reiter Test sagt etwas ueber DIESEN
-               Befehl und nichts darueber, ob der Fuenfminutenlauf noch geht -
-               siehe bw_lauf_schreiben(). */
-            bw_lauf_schreiben($bw_gut === count($bw_ergebnisse)
-                              && !bw_zaehlung_misslungen($bw_cfg, $bw_st), false);
-            bw_mqtt_publish($bw_cfg, $bw_st);
-            bw_log('von Hand ausgeloest: ' . $bw_gut . ' von ' . count($bw_ergebnisse)
-                 . ' Ziel(en) angenommen');
         }
-        if (is_resource($bw_lock)) { fclose($bw_lock); }
+    } else {
+        /* DIESELBE SPERRE WIE LAUF UND ENDPUNKT (C2), seit 0.9.31 EINE Stelle mit Endpunkt und Befehlsbruecke:
+           bw_aktion_jetzt($c, 'knopf') - Stand unter der Sperre frisch, Rechnung bw_stand_nach_senden(), Lebenszeichen
+           ohne Takt, MQTT sofort. Der Knopf sendet wie bisher auch bei ausgeschaltetem Waechter (zum Ausprobieren). */
+        $bw_jr = bw_aktion_jetzt($bw_cfg, 'knopf');
+        if ($bw_jr['fehler'] === 'BESETZT') {
+            $bw_fehler[] = bw_t('TEXT.BESETZT');
+        } elseif ($bw_jr['fehler'] === 'KEIN_ZIEL') {
+            $bw_fehler[] = bw_t('TEXT.KEIN_ZIEL');
+        } else {
+            $bw_ergebnisse = $bw_jr['ergebnisse'];
+            if ($bw_jr['fehler'] === 'FRIST' || strpos($bw_jr['grund'], 'Frist') === 0) {
+                $bw_fehler[] = bw_e($bw_jr['grund']);
+            }
+        }
+    }
+}
+
+/* ---------------- Jalousie-Bausteine vorschlagen (Gruppe 23, V4, E-E6) ----------------
+ *
+ * Gruen: liest nur die Strukturdatei des Miniservers und speichert nichts. Die Auswahl fuellt danach nur das Formular
+ * im Reiter Einstellungen; gespeichert wird mit dem vorhandenen orangen Speichern (B2 prueft dann). */
+$bw_vorschlag = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vorschlagen'])) {
+    list($bw_vok, $bw_vmeld, $bw_vliste, $bw_vohne) = bw_jalousien_vorschlag($bw_cfg);
+    if (!$bw_vok) {
+        $bw_fehler[] = $bw_vmeld;
+    } else {
+        $bw_vorschlag = array('liste' => $bw_vliste, 'ohne' => $bw_vohne);
+        if (!$bw_vliste) {
+            $bw_fehler[] = bw_t('TEXT.VORSCHLAG_LEER');
+        }
+    }
+}
+
+/* ---------------- Protokoll leeren (Gruppe 23, B6b) ----------------
+ *
+ * Orange: setzt beschattung.log und cron.err auf 0 Byte, loescht nie eine Datei. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['protokoll_leeren'])) {
+    $bw_pl = bw_protokoll_leeren();
+    $bw_pl_gut = array_keys(array_filter($bw_pl));
+    $bw_pl_fehl = array_keys(array_diff_key($bw_pl, array_flip($bw_pl_gut)));
+    if (!$bw_pl) {
+        $bw_meldungen[] = bw_t('TEXT.LEEREN_NICHTS');
+    }
+    if ($bw_pl_gut) {
+        $bw_meldungen[] = sprintf(bw_t('TEXT.LEEREN_OK'), bw_e(implode(', ', $bw_pl_gut)));
+    }
+    if ($bw_pl_fehl) {
+        $bw_fehler[] = sprintf(bw_t('TEXT.LEEREN_FEHL'), bw_e(implode(', ', $bw_pl_fehl)));
     }
 }
 
@@ -475,6 +568,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_sichern'])) {
     $bw_js = json_encode(bw_sicherung_bauen(),
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (is_string($bw_js) && $bw_js !== '') {
+        while (ob_get_level() > 0) { ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="beschattungswaechter_einstellungen_'
                . date('Ymd_His') . '.json"');
@@ -521,6 +615,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
             $bw_meldungen = array_merge($bw_meldungen, $bw_nach['ok']);
             $bw_fehler = array_merge($bw_fehler, $bw_nach['fehler']);
             bw_mqtt_zustaende($bw_cfg, true);
+            /* V1 (Gruppe 23): eine Sicherung kann den Haken der Befehlsbruecke aendern. */
+            list($bw_bm_ok, $bw_bm_f) = bw_bruecke_meldungen(bw_bruecke_schalten($bw_cfg));
+            $bw_meldungen = array_merge($bw_meldungen, $bw_bm_ok);
+            $bw_fehler = array_merge($bw_fehler, $bw_bm_f);
         } else {
             $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
         }
@@ -547,7 +645,8 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
                                   'ergebnisse' => array_values($bw_ergebnisse),
                                   'zaehlung' => $bw_zaehlung,
                                   'tab' => $bw_tab,
-                                  'eingaben' => $bw_eingaben))) {
+                                  'eingaben' => $bw_eingaben,
+                                  'vorschlag' => $bw_vorschlag))) {
         header('Location: index.php?form=' . substr($bw_tab, 4), true, 303);
         exit;
     }
@@ -564,6 +663,7 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
             $bw_tab = $bw_einmal['tab'];
         }
         $bw_eingaben = $bw_einmal['eingaben'];
+        $bw_vorschlag = $bw_einmal['vorschlag'];
     }
 }
 
@@ -572,7 +672,8 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
 $bw_eg = $bw_eingaben;
 
 if ($bw_rahmen) {
-    LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
+    /* B8 (Gruppe 23): die eigene Wikiseite (HTTP 200, angelegt 01.10.2026), wie Docker/Abfahrt/Ferien. */
+    LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/plugins/beschattungswaechter/start', 'help.html');
 }
 
 ?>
@@ -751,10 +852,19 @@ if ($bw_ms_fehlt) {
 <!-- ================= Einstellungen ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 <div class="sm-hinweis"><?= bw_t('TEXT.WAS_IST_DAS') ?></div>
+<?php /* Gruppe 23 (N6, E-E21): EINE Legende oben je Reiter - unter dem Kasten, der als Erstes im ersten Reiter steht (kas). */ ?>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span> <span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span></div>
 
 <h2><?php echo bw_t('TEXT.H_EINSTELLUNGEN'); ?></h2>
 
 <div class="sm-step"><?php echo bw_t('TEXT.WARUM'); ?></div>
+
+<?php /* V4 (Gruppe 23): eigenes Formular, der Knopf steht ueber der Zieltabelle (form-Attribut) - ein Formular im
+   Formular gibt es nicht. */ ?>
+<form action="index.php" method="post" id="bw-vorschlag">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+</form>
 
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
@@ -805,6 +915,31 @@ if ($bw_ms_fehlt) { ?>
 
 <h3><?php echo bw_t('TEXT.H_ZIELE'); ?></h3>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_ZIELE_ERKL'); ?></p>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-lesen" type="submit" form="bw-vorschlag" name="vorschlagen" value="1"><?php echo bw_t('TEXT.K_VORSCHLAG'); ?></button>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_VORSCHLAG'); ?></p>
+<?php if (is_array($bw_vorschlag) && $bw_vorschlag['liste']) { ?>
+<div class="sm-hinweis"><?php echo bw_t('TEXT.VORSCHLAG_HINWEIS'); ?></div>
+<div class="sm-breit">
+<table class="sm-tbl" id="bw-vorschlag-liste">
+  <tr><th></th><th><?php echo bw_t('TEXT.V_ART'); ?></th><th><?php echo bw_t('TEXT.BAUSTEIN'); ?></th><th><?php echo bw_t('TEXT.RAUM'); ?></th><th><?php echo bw_t('TEXT.L_UUID'); ?></th><th><?php echo bw_t('TEXT.L_BEFEHL'); ?></th></tr>
+<?php foreach ($bw_vorschlag['liste'] as $bw_v) { ?>
+  <tr><td><input data-role="none" type="checkbox" class="bw-wahl" value="<?= bw_e($bw_v['uuid']) ?>"></td>
+      <td><?= bw_e($bw_v['art'] === 'zentral' ? sprintf(bw_t('TEXT.V_ZENTRAL'), (int) $bw_v['umfasst']) : bw_t('TEXT.V_EINZELN')) ?></td>
+      <td><?= bw_e($bw_v['name']) ?></td><td><?= bw_e($bw_v['raum']) ?></td>
+      <td class="sm-mono"><?= bw_e($bw_v['uuid']) ?></td><td class="sm-mono">auto</td></tr>
+<?php } ?>
+</table>
+</div>
+<?php if ((int) $bw_vorschlag['ohne'] > 0) { ?>
+<p class="sm-hilfe"><?= bw_e(sprintf(bw_t('TEXT.VORSCHLAG_OHNE'), (int) $bw_vorschlag['ohne'])) ?></p>
+<?php } ?>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-lesen" type="button" id="bw-uebernehmen"><?php echo bw_t('TEXT.K_UEBERNEHMEN'); ?></button>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_UEBERNEHMEN'); ?></p>
+<?php } ?>
 <div class="sm-breit">
 <table class="sm-tbl">
   <tr><th>#</th><th><?php echo bw_t('TEXT.L_UUID'); ?></th><th><?php echo bw_t('TEXT.L_BEFEHL'); ?></th></tr>
@@ -850,9 +985,11 @@ if ($bw_ms_fehlt) { ?>
 <div class="sm-row">
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_WETTER_TOKEN'); ?></label>
-    <!-- Das Wortzeichen reist nach einer Beanstandung NICHT mit (X-2): das
-         Feld zeigt den gespeicherten Stand und wird nur markiert. -->
-    <input data-role="none" type="text" name="wetter_token" value="<?= bw_e($bw_cfg['wetter_token']) ?>" autocomplete="off"<?= bw_markiert($bw_eg, 'wetter_token') ?>>
+    <!-- B9 (Gruppe 23, Form Sprachmodul 1.1.4): Passwortfeld ohne Wert; der Platzhalter nennt nur die Laenge. Das
+         Wortzeichen reist nach einer Beanstandung NICHT mit (X-2), das Feld wird nur markiert. -->
+    <?php $bw_wtl = strlen((string) $bw_cfg['wetter_token']); ?>
+    <input data-role="none" type="password" name="wetter_token" value="" autocomplete="new-password" placeholder="<?= bw_e($bw_wtl > 0 ? sprintf(bw_t('TEXT.P_TOKEN_DA'), $bw_wtl) : bw_t('TEXT.P_TOKEN_KEINS')) ?>"<?= bw_markiert($bw_eg, 'wetter_token') ?>>
+    <label><input data-role="none" type="checkbox" name="wetter_token_loeschen" value="1"> <?php echo bw_t('TEXT.L_TOKEN_LOESCHEN'); ?></label>
   </div>
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_SONNE_MIN'); ?></label>
@@ -889,10 +1026,22 @@ if ($bw_ms_fehlt) { ?>
 </div>
 <p class="sm-hilfe"><?= sprintf(bw_t('TEXT.H_SONNE_FELDER'), (int) round(bw_sonne_frist() / 60)) ?></p>
 
+<!-- V3 (Gruppe 23): Anwesenheit vom BLE-Scanner NG (haus/anwesenheit/jemand), ab Werk aus. -->
+<h3><?php echo bw_t('TEXT.H_ANWESEND'); ?></h3>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_ANWESEND_ERKL'); ?></p>
+<div class="sm-feld">
+  <label<?= bw_markiert($bw_eg, 'anwesend_ein', false) ?>><input data-role="none" type="checkbox" name="anwesend_ein" value="1"<?= bw_ungueltig($bw_eg, 'anwesend_ein') ?><?= bw_formhaken($bw_eg, 'anwesend_ein', $bw_cfg['anwesend_ein']) ? ' checked' : '' ?>>
+    <?php echo bw_t('TEXT.L_ANWESEND_EIN'); ?></label>
+</div>
+<div class="sm-feld">
+  <label><?php echo bw_t('TEXT.L_ANWESEND_FRIST'); ?></label>
+  <input data-role="none" type="text" name="anwesend_frist" value="<?= bw_e(bw_formwert($bw_eg, 'anwesend_frist', (int) $bw_cfg['anwesend_frist'])) ?>"<?= bw_markiert($bw_eg, 'anwesend_frist') ?>>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('TEXT.H_ANWESEND_FELDER'); ?></p>
+
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
 </div>
-<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span> <span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span></div>
 </form>
 
 <h2><?= bw_t('TEXT.H_SICHERUNG') ?></h2>
@@ -930,6 +1079,7 @@ if ($bw_altwerte) { ?>
 <!-- ================= MQTT ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 <h2>MQTT</h2>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 <div class="sm-step"><?php echo bw_t('MQTT.WARUM'); ?></div>
 <?php
 /* Der Gateway ist KEIN Plugin, sondern seit LoxBerry 3 Bestandteil des
@@ -963,16 +1113,25 @@ if ($bw_gw === null) { ?>
     <label<?= bw_markiert($bw_eg, 'mqtt_ein', false) ?>><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= bw_ungueltig($bw_eg, 'mqtt_ein') ?><?= bw_formhaken($bw_eg, 'mqtt_ein', $bw_cfg['mqtt_ein']) ? ' checked' : '' ?>>
       <?php echo bw_t('MQTT.L_EIN'); ?></label>
     <p class="sm-hilfe"><?php echo bw_t('MQTT.H_EIN'); ?></p>
+<?php if (empty($bw_cfg['mqtt_ein'])) { ?>
+    <p class="sm-grau"><?php echo bw_t('MQTT.AUS_GRAU'); ?></p>
+<?php } ?>
   </div>
   <div class="sm-feld">
     <label><?php echo bw_t('TEXT.L_THEMA'); ?></label>
     <input data-role="none" type="text" name="mqtt_thema" value="<?= bw_e(bw_formwert($bw_eg, 'mqtt_thema', $bw_cfg['mqtt_thema'])) ?>"<?= bw_markiert($bw_eg, 'mqtt_thema') ?>>
     <p class="sm-hilfe"><?php echo bw_t('MQTT.H_THEMA'); ?></p>
   </div>
+  <h3><?php echo bw_t('BEFEHL.H_MQTT'); ?></h3>
+  <div class="sm-feld">
+    <label<?= bw_markiert($bw_eg, 'befehle_mqtt_ein', false) ?>><input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"<?= bw_ungueltig($bw_eg, 'befehle_mqtt_ein') ?><?= bw_formhaken($bw_eg, 'befehle_mqtt_ein', $bw_cfg['befehle_mqtt_ein']) ? ' checked' : '' ?>>
+      <?php echo bw_t('BEFEHL.L_ANNEHMEN'); ?></label>
+    <p class="sm-hilfe"><?php echo bw_t('BEFEHL.H_ANNEHMEN'); ?></p>
+    <p class="sm-hilfe"><?php echo bw_t('BEFEHL.H_ZWEITER_HAKEN'); ?></p>
+  </div>
   <div class="sm-knopfreihe">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern_mqtt" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
   </div>
-  <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 </form>
 
 <?php
@@ -996,6 +1155,26 @@ if ($bw_gwf >= 2) { ?>
 <?php } else { ?>
 <div class="sm-warnung"><?php echo bw_t('MQTT.ABO_PFLICHT'); ?></div>
 <p class="sm-hilfe"><?php echo bw_t('MQTT.ABO_V2'); ?></p>
+<?php } ?>
+
+<?php
+/* Gruppe 23 (2.5, E-E11): die V2-Hakenliste - nur bei Gatewayversion 2 oder unbekannt, aus derselben Namenstabelle wie
+   der Reiter Einbindung. "Noncached" fuer status/ok und ziele: an ihnen haengen Anzeige und Benachrichtigung, und mit
+   dem Dedup des Gateways blieben sie nach einem Neustart des Miniservers sonst auf dem Startwert. */
+if ($bw_gwf >= 2 || $bw_gwf === 0) { ?>
+<h3><?php echo bw_t('MQTT.H_HAKEN'); ?></h3>
+<p class="sm-hilfe"><?php echo bw_t('MQTT.HAKEN_ERKL'); ?></p>
+<div class="sm-breit">
+<table class="sm-tbl">
+  <tr><th><?php echo bw_t('MQTT.THEMA'); ?></th><th><?php echo bw_t('LOX.NT_NAME'); ?></th><th><?php echo bw_t('MQTT.T_HAKEN'); ?></th><th>Noncached</th></tr>
+<?php foreach (bw_mqtt_namenstabelle($bw_cfg) as $bw_n) { ?>
+  <tr><td class="sm-mono"><?= bw_e($bw_n['voll']) ?></td><td class="sm-mono"><?= bw_e($bw_n['name']) ?></td>
+      <td><?= bw_e(bw_t($bw_n['haken'] ? 'TEXT.JA' : 'TEXT.NEIN')) ?></td>
+      <td><?= bw_e(bw_t($bw_n['noncached'] ? 'TEXT.JA' : 'TEXT.NEIN')) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('MQTT.HAKEN_BRUECKE'); ?></p>
 <?php } ?>
 
 <h3><?php echo bw_t('MQTT.H_THEMEN'); ?></h3>
@@ -1026,162 +1205,130 @@ foreach (bw_mqtt_themen($bw_cfg) as $bw_th2 => $bw_bez) {
 <!-- ================= Einbindung in Loxone ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?php echo bw_t('LOX.H'); ?></h2>
+<?php /* Gruppe 23 (E-E21, N6): EINE Legende oben je Reiter - Lesen (Kopierknoepfe), Technik (Vorlagen), Aktion. */ ?>
+<div class="sm-legende">
+  <span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span>
+  <span><i class="sm-punkt sm-b-technik"></i> <?php echo bw_t('LEGENDE.TECHNIK'); ?></span>
+  <span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span>
+</div>
 <div class="sm-hinweis"><?php echo bw_t('LOX.ERKL'); ?></div>
 
 <div class="sm-step"><b>1. <?php echo bw_t('LOX.S1_T'); ?></b><br><?php echo bw_t('LOX.S1'); ?></div>
 
-<div class="sm-step"><b>2. <?php echo bw_t('LOX.S2_T'); ?></b><br><?php echo bw_t('LOX.S2'); ?>
+<?php
+/* Gruppe 23 (2.5): die Namenstabelle - je gesendetes Thema der Name, den das MQTT-Gateway als Virtuellen Eingang
+   vergibt (bw_gateway_name()), aus bw_mqtt_namenstabelle(): EINE Quelle fuer Sendeliste, Hakenliste und
+   Bausteinliste. Die Kopierknoepfe lesen nur (gruen). */
+$bw_nt = bw_mqtt_namenstabelle($bw_cfg);
+?>
+<div class="sm-step" id="eb-werte"><b>2. <?php echo bw_t('LOX.S2M_T'); ?></b><br><?php echo bw_t('LOX.S2M'); ?>
+<?php if (empty($bw_cfg['mqtt_ein'])) { ?>
+<div class="sm-warnung"><?php echo bw_t('LOX.MQTT_AUS'); ?></div>
+<?php } ?>
+<div class="sm-breit">
 <table class="sm-tbl">
-  <tr><td><?php echo bw_t('LOX.ADRESSE'); ?></td>
-      <td class="sm-mono">http://<?= bw_e(bw_wirtsname()) ?><?php
-        $bw_par2 = array();
-        if ($bw_cfg['aktionstoken'] !== '') { $bw_par2['token'] = (string) $bw_cfg['aktionstoken']; }
-        $bw_par2['aktion'] = 'status';
-        echo bw_e(bw_endpunkt_pfad($bw_par2));
-      ?></td></tr>
-  <tr><td><?php echo bw_t('LOX.MERKWORT'); ?></td>
-      <td class="sm-mono"><?= bw_e($bw_cfg['aktionstoken'] !== '' ? $bw_cfg['aktionstoken'] : bw_t('LOX.KEIN_TOKEN')) ?></td></tr>
+  <tr><th><?php echo bw_t('LOX.NT_NAME'); ?></th><th><?php echo bw_t('MQTT.THEMA'); ?></th><th><?php echo bw_t('LOX.NT_WERTE'); ?></th><th><?php echo bw_t('MQTT.BEDEUTUNG'); ?></th><th><?php echo bw_t('LOX.NT_NR'); ?></th><th></th></tr>
+<?php foreach ($bw_nt as $bw_n) { ?>
+  <tr><td class="sm-mono"><?= bw_e($bw_n['name']) ?></td>
+      <td class="sm-mono"><?= bw_e($bw_n['voll']) ?></td>
+      <td><?= bw_e($bw_n['bereich']) ?><?= $bw_n['retain'] ? ' &middot; ' . bw_e(bw_t('LOX.NT_RETAIN')) : '' ?></td>
+      <td><?= bw_e(bw_t($bw_n['bez'])) ?></td>
+      <td><?= $bw_n['nr'] > 0 ? '#' . (int) $bw_n['nr'] : '&ndash;' ?></td>
+      <td><button data-role="none" type="button" class="sm-btn sm-b-lesen sm-kopie" style="min-width:0" data-kopie="<?= bw_e($bw_n['name']) ?>"><?php echo bw_t('LOX.K_KOPIE'); ?></button></td></tr>
+<?php } ?>
 </table>
-<div class="sm-warnung"><?php echo bw_t('LOX.MERKWORT_WARNUNG'); ?></div>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('LOX.NT_RECHTE'); ?></p>
+<p class="sm-hilfe"><?php echo bw_t('LOX.NT_RECONNECT'); ?></p>
+</div>
+
+<?php
+/* Gruppe 23 (V1, 3.1): die Befehle ueber die Befehlsbruecke - Tabelle aus bb_liste() (EINE Quelle fuer Reiter,
+   Vorlage und Musterprojekt). */
+list($bw_bl, $bw_bl_fehl) = bw_bruecke_liste();
+?>
+<div class="sm-step" id="eb-befehle"><b>3. <?php echo bw_t('BEFEHL.TITEL'); ?></b><br>
+<?php if ($bw_bl === null) { ?>
+<div class="sm-fehler"><?php echo bw_e(sprintf(bw_t('BEFEHL.NICHT_LADBAR'), $bw_bl_fehl)); ?></div>
+<?php } else {
+    $bw_bp = function_exists('bb_pfade') ? bb_pfade() : array();
+    $bw_bport = $bw_bp ? bb_broker($bw_bp)['udpin'] : 11884; ?>
+<?php echo bw_e(sprintf(bw_t('BEFEHL.TEXT'), (int) $bw_bport)); ?>
+<div class="<?= (!empty($bw_cfg['befehle_mqtt_ein']) && !empty($bw_cfg['mqtt_ein'])) ? 'sm-hilfe' : 'sm-warnung' ?>"><?php echo bw_e(bw_t((!empty($bw_cfg['befehle_mqtt_ein']) && !empty($bw_cfg['mqtt_ein'])) ? 'BEFEHL.HAKEN_AN' : 'BEFEHL.HAKEN_AUS')); ?></div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?php echo bw_t('BEFEHL.SP_TITEL'); ?></th><th><?php echo bw_t('BEFEHL.SP_THEMA'); ?></th><th><?php echo bw_t('BEFEHL.SP_BEFEHL'); ?></th><th><?php echo bw_t('BEFEHL.SP_SPERRE'); ?></th><th><?php echo bw_t('BEFEHL.SP_WIRKT'); ?></th></tr>
+<?php foreach ($bw_bl['befehle'] as $bw_bb) { ?>
+<tr><td><?= bw_e(bw_t($bw_bb['kachel'])) ?></td><td class="sm-mono"><?= bw_e($bw_bb['thema']) ?></td>
+    <td class="sm-mono"><?= bw_e(isset($bw_bb['loxone']['ein']) ? $bw_bb['loxone']['ein'] : '') ?></td>
+    <td class="sm-hilfe"><?= bw_e(sprintf(bw_t('BEFEHL.SPERRE'), (int) $bw_bb['sperre_s'])) ?></td>
+    <td class="sm-hilfe"><?= bw_e(bw_t($bw_bb['eingreifend'] ? 'BEFEHL.WIRKT_JETZT' : 'BEFEHL.WIRKT_PRUEFEN')) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?php echo bw_e(sprintf(bw_t('BEFEHL.QUITTUNG_H'), $bw_bl['lebenszeichen'])); ?></p>
+<p class="sm-hilfe"><?php echo bw_t('BEFEHL.RETAIN_NIE'); ?></p>
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
   <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
   <div class="sm-knopfreihe">
-    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="token_neu" value="1"><?php echo bw_t('LOX.K_TOKEN'); ?></button>
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="befehle"><?php echo bw_t('BEFEHL.K_VORLAGE'); ?></button>
   </div>
-  <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 </form>
-</div>
-
-<div class="sm-step"><b>3. <?php echo bw_t('LOX.S3_T'); ?></b><br><?php echo bw_t('LOX.S3'); ?>
-<div class="sm-breit">
-<table class="sm-tbl">
-  <tr><th><?php echo bw_t('LOX.FELD'); ?></th><th><?php echo bw_t('LOX.CHECK'); ?></th><th><?php echo bw_t('LOX.EINHEIT'); ?></th><th><?php echo bw_t('LOX.BEDEUTUNG'); ?></th></tr>
-<?php
-/* Der Suchtext kommt aus bw_check() - EINE Funktion, dieselbe, die den
-   Endpunkt beschriftet. Als Fliesstext in der Sprachdatei laeuft er beim
-   naechsten neuen Feld auseinander, und abgeschrieben wird die Tabelle,
-   nicht der Quelltext. */
-foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
-  <tr><td class="sm-mono">BW <?= bw_e($bw_fn) ?></td>
-      <td class="sm-mono"><?= bw_e(bw_check($bw_fn)) ?></td>
-      <td><?= bw_e($bw_fi['einheit']) ?></td>
-      <td><?= bw_e(bw_t($bw_fi['bez'])) ?></td></tr>
+<p class="sm-hilfe"><?php echo bw_t('BEFEHL.VORLAGE_H'); ?></p>
 <?php } ?>
-</table>
 </div>
-<p class="sm-hilfe"><?php echo bw_t('LOX.CHECK_HILFE'); ?></p>
-</div>
-
-<div class="sm-step"><b>4. <?php echo bw_t('LOX.S4_T'); ?></b><br><?php echo bw_t('LOX.S4'); ?></div>
 
 <?php
-/* DIE BAUSTEIN-LISTE (O5, Durchgang 30.09.2026; X-8 vollstaendig 02.10.2026,
- * Entscheidung 36).
- *   EINE Liste fuer alles, was die beiden Vorlagen aus Schritt 6 anlegen, und
- *      die Meldungen dazu. Titel, Adressen, Suchtexte, Anzeigenamen und
- *      Grenzen kommen aus DEMSELBEN XML, das die Knoepfe erzeugen
- *      (bw_vorlage('in'/'out')); die Kennung {F:NAME} aus bw_felder() in
- *      derselben Reihenfolge. Die Ausgangsvorlage traegt den zweiten Befehl
- *      nur bei eingeschalteter Zaehlung - die Liste zaehlt mit.
- *   Die Ausfallerkennung haengt am Lebenszeichen des Takts (LAUFALTER), nicht
- *      an ALTER: das ist das Alter des letzten Befehls, bei einem gesunden
- *      Waechter regulaer 30 Minuten und nachts zehn Stunden - "ALTER groesser
- *      als 900" war ein Dauerfehlalarm (Pruefbericht Oberflaeche O5). Die
- *      Schwelle ist die von OK (bw_ok_grenze(), 900 s).
- *   Die Bausteintypen heissen wie in Loxone Config
- *      (Werkzeuge/loxone_typ_deutsch.txt): Schwellwertschalter,
- *      Analogkomparator, Oder, Benachrichtigung.
- *   Die drei Faelle gehen ueber zwei Oder an die Benachrichtigung: sie sendet
- *      nur beim Wechsel von aus auf ein (Regeln/09). Ein Oder hat genau zwei
- *      Eingaenge; jede Zeile bezieht sich nur auf kleinere Nummern.
- *   Verweise auf andere Zeilen werden gerechnet, nicht getippt (Regeln/01):
- *      {Bn} bzw. {F:NAME} in einem Text wird zur laufenden Nummer "#n".
- * Welle Bild 6 (0.9.29): der Inhalt ist durch die Liste des Musterprojekts ersetzt (12 feste
- *   Zeilen, Kommentar unten); das Obige beschreibt die Liste bis 0.9.28.
- * Welle Bild 11 VOLL (0.9.30, Hausherr 11.10.2026: Vollausstattung, ein Laie soll das Maximum
- *   leicht uebernehmen koennen): 32 Zeilen aus Musterprojekt/baustein_listen.txt, Abschnitt
- *   Beschattungswaechter; Zeilen 1 bis 12 wie bisher, nur #12 bekommt seine Leitung jetzt vom
- *   ODER #30 (Taste #11 oder Beginn der Beschattung) - der Satz "jede Zeile bezieht sich nur auf
- *   kleinere Nummern" gilt deshalb bis auf #12. Dazu Ueberschrift, Kasten "So uebernehmen Sie
- *   diese Seite" (BAUSTEIN.A_S1..A_S11) und Hinweise (Kommentar unten).
- * Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML. */
-$bw_grenze = bw_ok_grenze();
-$bw_bs_attr = function ($xml, $tag) {
-    preg_match_all('/<' . $tag . '\s([^>]*?)\/?>/', $xml, $bw_m);
-    $bw_aus = array();
-    foreach ($bw_m[1] as $bw_roh) {
-        preg_match_all('/(\w+)="([^"]*)"/', $bw_roh, $bw_a);
-        $bw_z = array();
-        foreach ($bw_a[1] as $bw_j => $bw_k) {
-            $bw_z[$bw_k] = html_entity_decode($bw_a[2][$bw_j], ENT_QUOTES | ENT_XML1, 'UTF-8');
-        }
-        $bw_aus[] = $bw_z;
-    }
-    return $bw_aus;
-};
+/* DIE BAUSTEIN-LISTE - seit Welle Bild 11 VOLL (0.9.30) die Seite "Beschattungswaechter" des LoxBerry-Plugins
+ * Musterprojekts (Musterprojekt/baustein_listen.txt), eine Zeile = ein Baustein. SEIT 0.9.31 (Gruppe 23, Entwurf 9)
+ * 35 Zeilen: die Eingaenge sind Virtuelle Eingaenge mit dem Namen, den das MQTT-Gateway vergibt (aus
+ * bw_mqtt_namenstabelle() - ein anderes Praefix aendert die Namen mit), #5 eine Analogwertvalidierung am
+ * Lebenszeichen status/zaehler (Tmc 1500 s, Konstante #33), #12/#32 Befehle am Ausgang "LoxBerry MQTT-Gateway" (Text aus
+ * bb_liste()), #34 UND und #35 Einschaltverzoegerung gegen die Fehlalarme der Zaehlung alle 15 Minuten (N5, E-E18).
+ * Verweise in den Texten als {Bn} werden zur laufenden Nummer "#n" gerechnet (Regeln/01); {L:ABSCHNITT.SCHLUESSEL}
+ * nennt die Beschriftung der Oberflaeche. Zeile: array(Kennung, Typ, Name, Parameter, Verbindung) als HTML. */
 $bw_bs_mono = function ($s) { return '<span class="sm-mono">' . bw_e($s) . '</span>'; };
-$bw_bs_w = function ($z, $k) { return isset($z[$k]) ? (string) $z[$k] : ''; };
-list($bw_vi_datei, $bw_vi_xml) = bw_vorlage('in', $bw_cfg);
-list($bw_vo_datei, $bw_vo_xml) = bw_vorlage('out', $bw_cfg);
-$bw_vi_kopf = $bw_bs_attr($bw_vi_xml, 'VirtualInHttp');
-$bw_vi_kopf = $bw_vi_kopf ? $bw_vi_kopf[0] : array();
-$bw_vo_kopf = $bw_bs_attr($bw_vo_xml, 'VirtualOut');
-$bw_vo_kopf = $bw_vo_kopf ? $bw_vo_kopf[0] : array();
-/* Welle Bild 6 (0.9.29, Entscheidung A): die Liste ist die im LoxBerry-Plugins Musterprojekt
- * in Loxone Config gebaute und mit leitungen_setzen.py verbundene (Musterprojekt/
- * baustein_listen.txt, Abschnitt Beschattungswaechter) - eine Zeile = ein Baustein, nur die
- * Hauptvariante, 12 feste Zeilen statt einer Zeile je Feld und je Befehl der Vorlagen. Die
- * Namen #1 bis #4 kommen wie bisher aus DEMSELBEN XML wie der Vorlage-Knopf (bw_vorlage('in'),
- * Felder in der Reihenfolge von bw_felder()), der Name von #12 aus bw_vorlage('out'), die
- * Vorlagentitel aus den XML-Koepfen. Die Logiknamen sind in beiden Sprachen die des
- * Musterprojekts. Kennung Bn = Zeile n; Verweise in den Texten als {Bn}. */
-$bw_bs_feld = array();
-foreach (bw_felder() as $bw_fn => $bw_fi) {
-    if (!empty($bw_fi['zeile'])) { $bw_bs_feld[] = $bw_fn; }
-}
-$bw_vi_titel = array();
-foreach ($bw_bs_attr($bw_vi_xml, 'VirtualInHttpCmd') as $bw_i => $bw_c) {
-    if (isset($bw_bs_feld[$bw_i])) { $bw_vi_titel[$bw_bs_feld[$bw_i]] = $bw_bs_w($bw_c, 'Title'); }
-}
-$bw_bs_vi = function ($feld) use ($bw_vi_titel, $bw_bs_mono) {
-    return $bw_bs_mono(isset($bw_vi_titel[$feld]) ? $bw_vi_titel[$feld] : 'BW ' . $feld);
+$bw_bs_nt = array();
+foreach ($bw_nt as $bw_n) { $bw_bs_nt[$bw_n['thema']] = $bw_n['name']; }
+$bw_bs_vi = function ($thema) use ($bw_bs_nt, $bw_bs_mono) {
+    return $bw_bs_mono(isset($bw_bs_nt[$thema]) ? $bw_bs_nt[$thema] : $thema);
 };
-$bw_vo_bef = $bw_bs_attr($bw_vo_xml, 'VirtualOutCmd');
-$bw_bs_jetzt = $bw_vo_bef ? $bw_bs_w($bw_vo_bef[0], 'Title') : '';
-/* Welle Bild 11 VOLL (0.9.30): Zeile 32 nennt den Befehl "Automatiken zaehlen". Die Vorlage traegt
- * ihn nur mit dem Haken "Die Wirkung messen" (pruefen_ein). Der Name kommt deshalb aus DERSELBEN
- * Funktion wie der Vorlage-Knopf, mit gesetztem Haken - nur fuer die Anzeige; gespeichert und
- * gesendet wird nichts. Erkannt am Befehl aktion=pruefen, nicht an der Stelle. */
-list($bw_vq_datei_voll, $bw_vq_xml_voll) = bw_vorlage('out', array('pruefen_ein' => 1) + $bw_cfg);
-$bw_bs_zaehlen = '';
-foreach ($bw_bs_attr($bw_vq_xml_voll, 'VirtualOutCmd') as $bw_c) {
-    if (strpos($bw_bs_w($bw_c, 'CmdOn'), 'aktion=pruefen') !== false) { $bw_bs_zaehlen = $bw_bs_w($bw_c, 'Title'); }
+$bw_bs_pf = bw_mqtt_praefix($bw_cfg['mqtt_thema']);
+$bw_bs_bef = array('jetzt' => 'publish ' . $bw_bs_pf . '/befehl/jetzt 1', 'pruefen' => 'publish ' . $bw_bs_pf . '/befehl/pruefen 1');
+$bw_bs_qt = array('jetzt' => $bw_bs_pf . '/befehl/jetzt/quittung', 'pruefen' => $bw_bs_pf . '/befehl/pruefen/quittung');
+if ($bw_bl !== null) {
+    foreach ($bw_bl['befehle'] as $bw_bb) {
+        if (isset($bw_bs_bef[$bw_bb['name']], $bw_bb['loxone']['ein'])) {
+            $bw_bs_bef[$bw_bb['name']] = $bw_bb['loxone']['ein'];
+            $bw_bs_qt[$bw_bb['name']] = $bw_bb['thema'] . '/quittung';
+        }
+    }
 }
-$bw_bs_vit = bw_e($bw_bs_w($bw_vi_kopf, 'Title'));
-$bw_bs_vot = bw_e($bw_bs_w($bw_vo_kopf, 'Title'));
+$bw_vim = bw_t('BAUSTEIN.BT_VIM');
+$bw_gwa = bw_t('BAUSTEIN.BT_GWA');
 $bw_bs = array(
-    array('B1', sprintf(bw_t('BAUSTEIN.B1_TYP'), $bw_bs_vit), $bw_bs_vi('LAUFALTER'), bw_t('BAUSTEIN.B1_PARAM'), bw_t('BAUSTEIN.B1_VERB')),
-    array('B2', sprintf(bw_t('BAUSTEIN.B2_TYP'), $bw_bs_vit), $bw_bs_vi('FEHLER'), bw_t('BAUSTEIN.B2_PARAM'), bw_t('BAUSTEIN.B2_VERB')),
-    array('B3', sprintf(bw_t('BAUSTEIN.B3_TYP'), $bw_bs_vit), $bw_bs_vi('AUTOMATIKEN'), bw_t('BAUSTEIN.B3_PARAM'), bw_t('BAUSTEIN.B3_VERB')),
-    array('B4', sprintf(bw_t('BAUSTEIN.B4_TYP'), $bw_bs_vit), $bw_bs_vi('SCHARF'), bw_t('BAUSTEIN.B4_PARAM'), bw_t('BAUSTEIN.B4_VERB')),
-    array('B5', bw_t('BAUSTEIN.B5_TYP'), $bw_bs_mono('BW Waechter tot'),
-          vsprintf(bw_t('BAUSTEIN.B5_PARAM'), array($bw_grenze, (int) round($bw_grenze * 2 / 3))), bw_t('BAUSTEIN.B5_VERB')),
+    array('B1', $bw_vim, $bw_bs_vi('status/zaehler'), bw_t('BAUSTEIN.B1_PARAM'), bw_t('BAUSTEIN.B1_VERB')),
+    array('B2', $bw_vim, $bw_bs_vi('fehler'), bw_t('BAUSTEIN.B2_PARAM'), bw_t('BAUSTEIN.B2_VERB')),
+    array('B3', $bw_vim, $bw_bs_vi('automatiken'), bw_t('BAUSTEIN.B3_PARAM'), bw_t('BAUSTEIN.B3_VERB')),
+    array('B4', $bw_vim, $bw_bs_vi('scharf'), bw_t('BAUSTEIN.B4_PARAM'), bw_t('BAUSTEIN.B4_VERB')),
+    array('B5', bw_t('BAUSTEIN.B5_TYP'), $bw_bs_mono('BW Waechter tot'), bw_t('BAUSTEIN.B5_PARAM'), bw_t('BAUSTEIN.B5_VERB')),
     array('B6', bw_t('BAUSTEIN.B6_TYP'), $bw_bs_mono('BW Waechter gestoert'), bw_t('BAUSTEIN.B6_PARAM'), bw_t('BAUSTEIN.B6_VERB')),
     array('B7', bw_t('BAUSTEIN.B7_TYP'), $bw_bs_mono('BW Automatik abgeschaltet'), bw_t('BAUSTEIN.B7_PARAM'), bw_t('BAUSTEIN.B7_VERB')),
     array('B8', bw_t('BAUSTEIN.B8_TYP'), $bw_bs_mono('BW Meldung 1 oder 2'), bw_t('BAUSTEIN.B8_PARAM'), bw_t('BAUSTEIN.B8_VERB')),
     array('B9', bw_t('BAUSTEIN.B9_TYP'), $bw_bs_mono('BW Meldung 1 bis 3'), bw_t('BAUSTEIN.B9_PARAM'), bw_t('BAUSTEIN.B9_VERB')),
     array('B10', bw_t('BAUSTEIN.B10_TYP'), $bw_bs_mono('BW Meldung'), bw_t('BAUSTEIN.B10_PARAM'), bw_t('BAUSTEIN.B10_VERB')),
     array('B11', bw_t('BAUSTEIN.B11_TYP'), $bw_bs_mono('BW Befehl jetzt'), bw_t('BAUSTEIN.B11_PARAM'), bw_t('BAUSTEIN.B11_VERB')),
-    array('B12', sprintf(bw_t('BAUSTEIN.B12_TYP'), $bw_bs_vot), $bw_bs_mono($bw_bs_jetzt), bw_t('BAUSTEIN.B12_PARAM'), bw_t('BAUSTEIN.B12_VERB')),
-    array('B13', sprintf(bw_t('BAUSTEIN.B13_TYP'), $bw_bs_vit), $bw_bs_vi('OK'), bw_t('BAUSTEIN.B13_PARAM'), bw_t('BAUSTEIN.B13_VERB')),
-    array('B14', sprintf(bw_t('BAUSTEIN.B14_TYP'), $bw_bs_vit), $bw_bs_vi('AKTIV'), bw_t('BAUSTEIN.B14_PARAM'), bw_t('BAUSTEIN.B14_VERB')),
-    array('B15', sprintf(bw_t('BAUSTEIN.B15_TYP'), $bw_bs_vit), $bw_bs_vi('FENSTER'), bw_t('BAUSTEIN.B15_PARAM'), bw_t('BAUSTEIN.B15_VERB')),
-    array('B16', sprintf(bw_t('BAUSTEIN.B16_TYP'), $bw_bs_vit), $bw_bs_vi('ZIELE'), bw_t('BAUSTEIN.B16_PARAM'), bw_t('BAUSTEIN.B16_VERB')),
+    array('B12', $bw_gwa, $bw_bs_mono('BW Befehl jetzt senden'),
+          bw_e(sprintf(bw_t('BAUSTEIN.B12_PARAM'), $bw_bs_bef['jetzt'], $bw_bs_qt['jetzt'])), bw_t('BAUSTEIN.B12_VERB')),
+    array('B13', $bw_vim, $bw_bs_vi('status/ok'), bw_t('BAUSTEIN.B13_PARAM'), bw_t('BAUSTEIN.B13_VERB')),
+    array('B14', $bw_vim, $bw_bs_vi('aktiv'), bw_t('BAUSTEIN.B14_PARAM'), bw_t('BAUSTEIN.B14_VERB')),
+    array('B15', $bw_vim, $bw_bs_vi('fenster'), bw_t('BAUSTEIN.B15_PARAM'), bw_t('BAUSTEIN.B15_VERB')),
+    array('B16', $bw_vim, $bw_bs_vi('ziele'), bw_t('BAUSTEIN.B16_PARAM'), bw_t('BAUSTEIN.B16_VERB')),
     array('B17', bw_t('BAUSTEIN.B17_TYP'), $bw_bs_mono('BW Zustand'), bw_t('BAUSTEIN.B17_PARAM'), bw_t('BAUSTEIN.B17_VERB')),
-    array('B18', sprintf(bw_t('BAUSTEIN.B18_TYP'), $bw_bs_vit), $bw_bs_vi('GESENDET'), bw_t('BAUSTEIN.B18_PARAM'), bw_t('BAUSTEIN.B18_VERB')),
-    array('B19', sprintf(bw_t('BAUSTEIN.B19_TYP'), $bw_bs_vit), $bw_bs_vi('CODE'), bw_t('BAUSTEIN.B19_PARAM'), bw_t('BAUSTEIN.B19_VERB')),
-    array('B20', sprintf(bw_t('BAUSTEIN.B20_TYP'), $bw_bs_vit), $bw_bs_vi('ALTER'), bw_t('BAUSTEIN.B20_PARAM'), bw_t('BAUSTEIN.B20_VERB')),
+    array('B18', $bw_vim, $bw_bs_vi('gesendet'), bw_t('BAUSTEIN.B18_PARAM'), bw_t('BAUSTEIN.B18_VERB')),
+    array('B19', $bw_vim, $bw_bs_vi('code'), bw_t('BAUSTEIN.B19_PARAM'), bw_t('BAUSTEIN.B19_VERB')),
+    array('B20', $bw_vim, $bw_bs_vi('alter'), bw_t('BAUSTEIN.B20_PARAM'), bw_t('BAUSTEIN.B20_VERB')),
     array('B21', bw_t('BAUSTEIN.B21_TYP'), $bw_bs_mono('BW Minuten seit Befehl'), bw_t('BAUSTEIN.B21_PARAM'), bw_t('BAUSTEIN.B21_VERB')),
     array('B22', bw_t('BAUSTEIN.B22_TYP'), $bw_bs_mono('BW Letzter Befehl'), bw_t('BAUSTEIN.B22_PARAM'), bw_t('BAUSTEIN.B22_VERB')),
     array('B23', bw_t('BAUSTEIN.B23_TYP'), $bw_bs_mono('BW Automatiken'), bw_t('BAUSTEIN.B23_PARAM'), bw_t('BAUSTEIN.B23_VERB')),
@@ -1193,29 +1340,25 @@ $bw_bs = array(
     array('B29', bw_t('BAUSTEIN.B29_TYP'), $bw_bs_mono('BW Beschattung beginnt'), bw_t('BAUSTEIN.B29_PARAM'), bw_t('BAUSTEIN.B29_VERB')),
     array('B30', bw_t('BAUSTEIN.B30_TYP'), $bw_bs_mono("BW Befehl jetzt ausl\u{f6}sen"), bw_t('BAUSTEIN.B30_PARAM'), bw_t('BAUSTEIN.B30_VERB')),
     array('B31', bw_t('BAUSTEIN.B31_TYP'), $bw_bs_mono("BW Automatiken jetzt z\u{e4}hlen"), bw_t('BAUSTEIN.B31_PARAM'), bw_t('BAUSTEIN.B31_VERB')),
-    array('B32', sprintf(bw_t('BAUSTEIN.B32_TYP'), $bw_bs_vot), $bw_bs_mono($bw_bs_zaehlen), bw_t('BAUSTEIN.B32_PARAM'), bw_t('BAUSTEIN.B32_VERB')),
+    array('B32', $bw_gwa, $bw_bs_mono("BW Automatiken z\u{e4}hlen"),
+          bw_e(sprintf(bw_t('BAUSTEIN.B32_PARAM'), $bw_bs_bef['pruefen'], $bw_bs_qt['pruefen'])), bw_t('BAUSTEIN.B32_VERB')),
+    array('B33', bw_t('BAUSTEIN.B33_TYP'), $bw_bs_mono('Konstante 1'), bw_t('BAUSTEIN.B33_PARAM'), bw_t('BAUSTEIN.B33_VERB')),
+    array('B34', bw_t('BAUSTEIN.B34_TYP'), $bw_bs_mono('BW abgeschaltet im Zeitfenster'), bw_t('BAUSTEIN.B34_PARAM'), bw_t('BAUSTEIN.B34_VERB')),
+    array('B35', bw_t('BAUSTEIN.B35_TYP'), $bw_bs_mono('BW Automatik bleibt abgeschaltet'), bw_t('BAUSTEIN.B35_PARAM'), bw_t('BAUSTEIN.B35_VERB')),
 );
 $bw_bs_nr = array();
 foreach ($bw_bs as $bw_i => $bw_z) { $bw_bs_nr[$bw_z[0]] = $bw_i + 1; }
-/* Welle Bild 11 VOLL: dazu {T:VI}/{T:VO} (Titel der Vorlagen), {T:VI_DATEI}/{T:VO_DATEI} (ihre
- * Dateinamen) und {L:ABSCHNITT.SCHLUESSEL} (Beschriftung der Oberflaeche: Knopf, Haken, Reiter) -
- * genannt wird, was dasteht, nicht abgeschrieben. Eingesetzte Texte maskiert. */
-$bw_bs_ph = array(
-    'T:VI' => $bw_bs_w($bw_vi_kopf, 'Title'), 'T:VO' => $bw_bs_w($bw_vo_kopf, 'Title'),
-    'T:VI_DATEI' => $bw_vi_datei, 'T:VO_DATEI' => $bw_vo_datei,
-);
-$bw_bs_r = function ($s) use ($bw_bs_nr, $bw_bs_ph) {
-    return preg_replace_callback('/\{(B\d+|F:[A-Z_]+|T:[A-Z_]+|L:[A-Z]+\.[A-Z0-9_]+)\}/', function ($m) use ($bw_bs_nr, $bw_bs_ph) {
+$bw_bs_r = function ($s) use ($bw_bs_nr) {
+    return preg_replace_callback('/\{(B\d+|L:[A-Z]+\.[A-Z0-9_]+)\}/', function ($m) use ($bw_bs_nr) {
         if (isset($bw_bs_nr[$m[1]])) { return '#' . $bw_bs_nr[$m[1]]; }
-        if (isset($bw_bs_ph[$m[1]])) { return bw_e($bw_bs_ph[$m[1]]); }
         if (strncmp($m[1], 'L:', 2) === 0) { return bw_e(bw_t(substr($m[1], 2))); }
         return $m[0];
     }, (string) $s);
 };
 $bw_bs_schritte = array('A_S1', 'A_S2', 'A_S3', 'A_S4', 'A_S5', 'A_S6', 'A_S7', 'A_S8', 'A_S9', 'A_S10', 'A_S11');
-$bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_HAND', 'H_SPERRE', 'H_ALLE');
+$bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_HAND', 'H_SPERRE', 'H_ALLE', 'H_DESIGNER');
 ?>
-<div class="sm-step"><b>5. <?php echo bw_t('BAUSTEIN.H'); ?></b><br><?php echo $bw_bs_r(sprintf(bw_t('BAUSTEIN.TEXT'), '<i>' . bw_e($bw_bs_w($bw_vi_kopf, 'Title')) . '</i>', '<i>' . bw_e($bw_bs_w($bw_vo_kopf, 'Title')) . '</i>')); ?>
+<div class="sm-step"><b>4. <?php echo bw_t('BAUSTEIN.H'); ?></b><br><?php echo $bw_bs_r(bw_t('BAUSTEIN.TEXT')); ?>
 <h3><?php echo bw_e(bw_t('BAUSTEIN.UE_TITEL')); ?></h3>
 <div class="sm-hinweis"><b><?php echo bw_e(bw_t('BAUSTEIN.SO_TITEL')); ?></b>
 <ol>
@@ -1246,9 +1389,71 @@ $bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_H
 <p class="sm-hilfe"><?= bw_t('LOX.MUSTERPROJEKT') ?></p>
 </div>
 
-<div class="sm-step"><b>6. <?php echo bw_t('LOX.S6_T'); ?></b><br><?php echo bw_t('LOX.S6'); ?>
+<?php
+/* Gruppe 23 (3.2, E-E13): der alte HTTP-Weg - zugeklappt, offen bei endpunkt_ein = 1. Der Lesezweig (status, json)
+   haengt am Haken endpunkt_ein (eigenes Formular, orange); jetzt/pruefen mit Merkwort wirken unabhaengig davon. */
+$bw_ep_an = !empty($bw_cfg['endpunkt_ein']);
+?>
+<details class="sm-step" id="eb-http"<?= $bw_ep_an ? ' open' : '' ?>>
+<summary><b>5. <?php echo bw_t('LOX.HTTP_T'); ?></b></summary>
+<div class="sm-hinweis"><?php echo bw_t('LOX.HTTP_HINWEIS'); ?></div>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <div class="sm-feld">
+    <label><input data-role="none" type="checkbox" name="endpunkt_ein" value="1"<?= $bw_ep_an ? ' checked' : '' ?>>
+      <?php echo bw_t('LOX.L_ENDPUNKT'); ?></label>
+    <p class="sm-hilfe"><?php echo bw_t('LOX.H_ENDPUNKT'); ?></p>
+  </div>
+  <div class="sm-knopfreihe">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern_endpunkt" value="1"><?php echo bw_t('TEXT.SPEICHERN'); ?></button>
+  </div>
+</form>
+
+<h3><?php echo bw_t('LOX.S2_T'); ?></h3>
+<p><?php echo bw_t('LOX.S2'); ?></p>
+<table class="sm-tbl">
+  <tr><td><?php echo bw_t('LOX.ADRESSE'); ?></td>
+      <td class="sm-mono">http://<?= bw_e(bw_wirtsname()) ?><?php
+        $bw_par2 = array();
+        if ($bw_cfg['aktionstoken'] !== '') { $bw_par2['token'] = (string) $bw_cfg['aktionstoken']; }
+        $bw_par2['aktion'] = 'status';
+        echo bw_e(bw_endpunkt_pfad($bw_par2));
+      ?></td></tr>
+  <tr><td><?php echo bw_t('LOX.MERKWORT'); ?></td>
+      <td class="sm-mono"><?= bw_e($bw_cfg['aktionstoken'] !== '' ? $bw_cfg['aktionstoken'] : bw_t('LOX.KEIN_TOKEN')) ?></td></tr>
+</table>
+<div class="sm-warnung"><?php echo bw_t('LOX.MERKWORT_WARNUNG'); ?></div>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+  <div class="sm-knopfreihe">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="token_neu" value="1"><?php echo bw_t('LOX.K_TOKEN'); ?></button>
+  </div>
+</form>
+
+<h3><?php echo bw_t('LOX.S3_T'); ?></h3>
+<p><?php echo bw_t('LOX.S3'); ?></p>
+<div class="sm-breit">
+<table class="sm-tbl">
+  <tr><th><?php echo bw_t('LOX.FELD'); ?></th><th><?php echo bw_t('LOX.CHECK'); ?></th><th><?php echo bw_t('LOX.EINHEIT'); ?></th><th><?php echo bw_t('LOX.BEDEUTUNG'); ?></th></tr>
+<?php
+/* Der Suchtext kommt aus bw_check() - EINE Funktion, dieselbe, die den
+   Endpunkt beschriftet. */
+foreach (bw_felder() as $bw_fn => $bw_fi) { ?>
+  <tr><td class="sm-mono">BW <?= bw_e($bw_fn) ?></td>
+      <td class="sm-mono"><?= bw_e(bw_check($bw_fn)) ?></td>
+      <td><?= bw_e($bw_fi['einheit']) ?></td>
+      <td><?= bw_e(bw_t($bw_fi['bez'])) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?php echo bw_t('LOX.CHECK_HILFE'); ?></p>
+<h3><?php echo bw_t('LOX.S4_T'); ?></h3>
+<p><?php echo bw_t('LOX.S4'); ?></p>
+<h3><?php echo bw_t('LOX.S6_T'); ?></h3>
+<p><?php echo bw_t('LOX.S6'); ?></p>
 <div class="sm-warnung"><?php echo bw_t('LOX.IMPORT_WARNUNG'); ?></div>
-<div class="sm-legende"><span><i class="sm-punkt sm-b-technik"></i> <?php echo bw_t('LEGENDE.TECHNIK'); ?></span></div>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <?php echo bw_fmt(); ?>
@@ -1262,14 +1467,19 @@ $bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_H
   </form>
 </div>
 <p class="sm-hilfe"><?php echo bw_t('LOX.IMPORTWEG'); ?></p>
-</div>
+</details>
 
-<div class="sm-step"><b>7. <?php echo bw_t('LOX.S7_T'); ?></b><br><?php echo bw_t('LOX.S7'); ?></div>
+<div class="sm-step"><b>6. <?php echo bw_t('LOX.S7_T'); ?></b><br><?php echo bw_t('LOX.S7'); ?></div>
 </div>
 
 <!-- ================= Test ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?php echo bw_t('TEXT.H_TEST'); ?></h2>
+<div class="sm-legende">
+  <span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span>
+  <span><i class="sm-punkt sm-b-technik"></i> <?php echo bw_t('LEGENDE.TECHNIK'); ?></span>
+  <span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span>
+</div>
 
 <div class="sm-kacheln">
   <div class="sm-kachel"><b><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></b><span><?php echo bw_t('TEXT.K_LETZTE'); ?></span><?php
@@ -1289,10 +1499,6 @@ $bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_H
 <form action="index.php" method="post">
   <?php echo bw_fmt(); ?>
 <input data-role="none" type="hidden" name="activetab" value="tab-test">
-<div class="sm-legende">
-  <span><i class="sm-punkt sm-b-technik"></i> <?php echo bw_t('LEGENDE.TECHNIK'); ?></span>
-  <span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span>
-</div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="trocken" value="1"><?php echo bw_t('TEXT.TROCKEN'); ?></button>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="jetzt" value="1"><?php echo bw_t('TEXT.JETZT'); ?></button>
@@ -1330,7 +1536,6 @@ $bw_bs_hinweise = array('ERLAEUTERUNG', 'H_GROESSER', 'H_START', 'H_JETZT', 'H_H
   <div class="sm-knopfreihe">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="zaehlen" value="1"><?php echo bw_t('TEXT.ZAEHLEN'); ?></button>
   </div>
-  <div class="sm-legende"><span><i class="sm-punkt sm-b-lesen"></i> <?php echo bw_t('LEGENDE.LESEN'); ?></span></div>
 </form>
 <?php } ?>
 <?php if ($bw_zaehlung !== null) { ?>
@@ -1394,7 +1599,7 @@ if ((int) $bw_lz['ts'] === 0) {
 $bw_eptok = trim((string) $bw_cfg['aktionstoken']);
 if ($bw_eptok === '') {
     bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 2, bw_t('TEXT.S_KEIN_TOKEN'));
-} elseif ($bw_tab !== 'tab-test') {
+} elseif (!$bw_test_offen) {
     bw_zeile($bw_selbst, bw_t('TEXT.S_EP_RUF'), 2, bw_t('TEXT.S_EP_NUR_TEST'));
 } else {
     $bw_epr = bw_endpunkt_probe($bw_eptok);
@@ -1408,7 +1613,11 @@ if ($bw_eptok === '') {
     }
 }
 
-/* 4. Die Themenliste gegen den Sendecode, in beide Richtungen. */
+/* 3b (Gruppe 23, E-E13): der HTTP-Lesezweig (status, json) haengt am Haken endpunkt_ein - aus ist gewollt (grau). */
+bw_zeile($bw_selbst, bw_t('TEXT.S_LESEZWEIG'), !empty($bw_cfg['endpunkt_ein']) ? 1 : 2,
+    bw_t(!empty($bw_cfg['endpunkt_ein']) ? 'TEXT.S_LESEZWEIG_AN' : 'TEXT.S_LESEZWEIG_AUS'));
+
+/* 4. Die Themenliste gegen den Sendecode, in beide Richtungen - seit 0.9.31 mit der Namenstabelle. */
 list($bw_thok, $bw_thl, $bw_ths, $bw_thnl, $bw_thns) = bw_mqtt_themen_pruefen($bw_cfg);
 bw_zeile($bw_selbst, bw_t('TEXT.S_THEMEN'), $bw_thok ? 1 : 0,
     $bw_thok ? sprintf(bw_t('TEXT.S_THEMEN_OK'), $bw_thl, $bw_ths)
@@ -1636,7 +1845,7 @@ if (empty($bw_cfg['wetter_ein'])) {
 } else {
     $bw_wd = bw_wetter_lesen();
     $bw_wjetzt = time();
-    if ($bw_tab === 'tab-test') {
+    if ($bw_test_offen) {
         $bw_wd = bw_wetter_eintragen($bw_wd, bw_wetter_holen($bw_cfg), $bw_wjetzt);
     }
     if (!isset($bw_wd['abruf']) || !is_array($bw_wd['abruf'])) {
@@ -1670,6 +1879,25 @@ if (empty($bw_cfg['wetter_ein'])) {
    dabei. Die zweite Zeile sagt je Ziel, was der Takt jetzt taete. */
 foreach (bw_sonne_pruefzeilen($bw_cfg) as $bw_sz) {
     bw_zeile($bw_selbst, $bw_sz[0], $bw_sz[1], $bw_sz[2]);
+}
+
+/* Gruppe 23 (V3): die Anwesenheit - dieselbe Rechnung wie der Takt (bw_anwesend_lage()). */
+$bw_az = bw_anwesend_pruefzeile($bw_cfg, $bw_stand);
+bw_zeile($bw_selbst, $bw_az[0], $bw_az[1], $bw_az[2]);
+
+/* Gruppe 23 (V1): die Befehlsbruecke - Dienst, Zustand, Abo und letzter Befehl (bw_bruecke_lage()). */
+list($bw_bok, $bw_btext) = bw_bruecke_lage();
+bw_zeile($bw_selbst, bw_t('BEFEHL.T_H'), $bw_bok === true ? 1 : ($bw_bok === null ? 2 : 0), $bw_btext);
+
+/* Gruppe 23 (B15/N10): laesst sich lauf.lock oeffnen? */
+bw_zeile($bw_selbst, bw_t('TEXT.S_SPERRE'), bw_sperrdatei_lage() === '' ? 1 : 0,
+    bw_sperrdatei_lage() === '' ? bw_t('TEXT.S_SPERRE_OK') : sprintf(bw_t('TEXT.S_SPERRE_RECHTE'), bw_paths()['datadir'] . '/lauf.lock'));
+
+/* Gruppe 23 (B18): eine liegengebliebene Upgrade-Marke (aelter als 3600 s oder weiter als 300 s in der Zukunft). */
+$bw_mk = bw_marke_pfad();
+if ($bw_mk !== '' && is_file($bw_mk)) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_MARKE'), bw_marke_gilt($bw_mk) ? 2 : 0,
+        bw_marke_gilt($bw_mk) ? bw_t('TEXT.S_MARKE_GILT') : sprintf(bw_t('TEXT.S_MARKE_ALT'), $bw_mk));
 }
 
 /* Der Healthcheck. LoxBerry ruft ihn nur auf, wenn die Datei im bin-Ordner
@@ -1734,7 +1962,6 @@ foreach ($bw_selbst as $bw_z2) { if ($bw_z2['ok'] === 2) { $bw_striche++; } }
   <div class="sm-knopfreihe">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="rest_weg" value="1"><?php echo bw_t('TEXT.REST_WEG'); ?></button>
   </div>
-  <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 </form>
 <?php } ?>
 
@@ -1745,42 +1972,40 @@ foreach ($bw_selbst as $bw_z2) { if ($bw_z2['ok'] === 2) { $bw_striche++; } }
 <?php } else { ?>
 <p class="sm-mono">http://<?= bw_e(bw_wirtsname()) ?><?= bw_e(bw_endpunkt_pfad(array('token' => $bw_tok, 'selftest' => '1'))) ?></p>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_ENDPUNKT_SELBST'); ?></p>
+<?php if (!empty($bw_cfg['endpunkt_ein'])) { /* Gruppe 23: die Lesesaetze nur bei eingeschaltetem Lesezweig. */ ?>
+<p class="sm-mono">http://<?= bw_e(bw_wirtsname()) ?><?= bw_e(bw_endpunkt_pfad(array('token' => $bw_tok, 'aktion' => 'status'))) ?></p>
+<p class="sm-mono">http://<?= bw_e(bw_wirtsname()) ?><?= bw_e(bw_endpunkt_pfad(array('token' => $bw_tok, 'aktion' => 'json'))) ?></p>
+<?php } else { ?>
+<p class="sm-grau"><?php echo bw_t('TEXT.S_LESEZWEIG_AUS'); ?></p>
+<?php } ?>
 <?php } ?>
 </div>
 
 <!-- ================= Logdateien ================= -->
 <div class="sm-seite<?= $bw_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <h2><?php echo bw_t('TEXT.H_PROTOKOLL'); ?></h2>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?php echo bw_t('LEGENDE.AKTION'); ?></span></div>
 <?php
-/* Der Hausstandard zeigt hier LBWeb::loglist_html() - damit sind auch
-   aeltere Dateien erreichbar und die Ansicht sieht aus wie in jedem anderen
-   Plugin. Die eigene Ansicht bleibt als Rueckfall, wenn es die Funktion
-   nicht gibt (aeltere LoxBerry-Fassung, oder der Rahmen ist gar nicht
-   geladen). */
-$bw_eigen = true;
-if ($bw_rahmen && method_exists('LBWeb', 'loglist_html')) {
-    $bw_aus = '';
-    try {
-        ob_start();
-        LBWeb::loglist_html();
-        $bw_aus = (string) ob_get_clean();
-    } catch (Throwable $bw_t2) {
-        $bw_aus = (string) ob_get_clean();
-    }
-    if (trim($bw_aus) !== '') { echo $bw_aus; $bw_eigen = false; }
-}
-if ($bw_eigen) {
-    $bw_logdatei = bw_paths()['logdatei'];
-    $bw_zeilen = is_file($bw_logdatei)
-        ? array_slice(array_reverse(file($bw_logdatei, FILE_IGNORE_NEW_LINES) ?: array()), 0, 80)
-        : array();
-    if ($bw_zeilen) {
-        echo '<div class="sm-log">' . bw_e(implode("\n", $bw_zeilen)) . '</div>';
-    } else {
-        echo '<p class="sm-grau">' . bw_e(bw_t('TEXT.PROTOKOLL_LEER')) . '</p>';
-    }
+/* E1 + B6b (Gruppe 23, wie Docker 1.3.19): das eigene Protokoll, die letzten 80 Zeilen, neueste oben - rueckwaerts
+   gelesen (bw_log_ende()). Der Zweig ueber die Logliste von LBWeb ist weg: die Funktion GIBT ihre Liste zurueck und
+   gibt nichts aus, der Rueckgabewert wurde verworfen - die Liste erschien nie, und mit display_errors=1 verdraengte
+   eine Warnung das eigene Protokoll (Pruefbericht B6a/E1). beschattung.log ist eine schlichte Datei, nicht ueber
+   LoxBerry::Log angemeldet - die Liste waere ohnehin leer. */
+$bw_zeilen = array_reverse(bw_log_ende(bw_paths()['logdatei'], 80));
+if ($bw_zeilen) {
+    echo '<div class="sm-log">' . bw_e(implode("\n", $bw_zeilen)) . '</div>';
+} else {
+    echo '<p class="sm-grau">' . bw_e(bw_t('TEXT.PROTOKOLL_LEER')) . '</p>';
 }
 ?>
+<form action="index.php" method="post">
+  <?php echo bw_fmt(); ?>
+  <input data-role="none" type="hidden" name="activetab" value="tab-log">
+  <div class="sm-knopfreihe">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="protokoll_leeren" value="1"><?php echo bw_t('TEXT.K_LEEREN'); ?></button>
+  </div>
+  <p class="sm-hilfe"><?php echo bw_t('TEXT.H_LEEREN'); ?></p>
+</form>
 <p class="sm-hilfe"><?php echo bw_t('TEXT.H_PROTOKOLL_HILFE'); ?></p>
 <?php
 /* Die Fehlerausgabe des Cron-Laufs (C5, Durchgang 30.09.2026). LoxBerry ruft
@@ -1808,8 +2033,42 @@ if ($bw_cez) { ?>
 		if (history.replaceState) { history.replaceState(null, '', 'index.php?form=' + id.replace('tab-', '')); }
 	}
 	reiter.forEach(function (r) {
-		r.addEventListener('click', function (e) { e.preventDefault(); zeige(r.dataset.ziel); });
+		/* B1 (Gruppe 23, wie Docker D22): der Reiter Test laedt die Seite neu (index.php?form=test) - gemessen wird
+		   nur dort; die uebrigen Reiter schalten ohne Seitenwechsel um. */
+		r.addEventListener('click', function (e) {
+			if (r.dataset.ziel === 'tab-test') { return; }
+			e.preventDefault(); zeige(r.dataset.ziel);
+		});
 	});
+	/* Gruppe 23: Kopierknopf der Namenstabelle (liest nur). */
+	document.querySelectorAll('.sm-kopie').forEach(function (k) {
+		k.addEventListener('click', function () {
+			var t = k.getAttribute('data-kopie') || '';
+			if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t); }
+			else { var a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select();
+			       try { document.execCommand('copy'); } catch (x) {} document.body.removeChild(a); }
+		});
+	});
+	/* Gruppe 23 (V4): die angekreuzten Bausteine NUR ins Formular uebernehmen (Ziel 1 ... in Reihenfolge, Befehl auto,
+	   Fassaden leer, hoechstens sechs); gespeichert wird erst mit "Einstellungen speichern". */
+	var ueb = document.getElementById('bw-uebernehmen');
+	if (ueb) {
+		ueb.addEventListener('click', function () {
+			var wahl = [];
+			document.querySelectorAll('.bw-wahl').forEach(function (w) { if (w.checked && wahl.length < 6) { wahl.push(w.value); } });
+			for (var i = 1; i <= 6; i++) {
+				var s = (i === 1) ? '' : String(i);
+				var u = document.querySelector('input[name="uuid' + s + '"]');
+				var b = document.querySelector('input[name="befehl' + s + '"]');
+				var f = document.querySelector('input[name="fassade' + s + '"]');
+				if (i <= wahl.length) {
+					if (u) { u.value = wahl[i - 1]; }
+					if (b) { b.value = 'auto'; }
+					if (f) { f.value = ''; }
+				} else if (u) { u.value = ''; }
+			}
+		});
+	}
 	// Der Server hat sm-active bereits gesetzt; dieser Aufruf richtet nur die
 	// versteckten activetab-Felder aus und ist ansonsten wirkungslos.
 	zeige(<?= json_encode($bw_tab) ?>);

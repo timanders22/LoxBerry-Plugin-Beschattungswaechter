@@ -230,9 +230,14 @@ function bw_keine_wurzel_abbruch($programm)
  * Positivliste. Ein Ziel zaehlt als eingerichtet, wenn seine Kennung nicht
  * leer ist.
  *
- * ALLES NEUE IST AB WERK AUS. Der Endpunkt hat kein Merkwort, MQTT ist
- * abgeschaltet, und die Wirkungsmessung ebenso - wer sie nicht benutzt, soll
- * die Themen nicht im Broker haben und keine Abfrage an seinen Miniserver.
+ * AB WERK AUS ist alles, was eingreift oder abfragt: der Endpunkt hat kein
+ * Merkwort, die Wirkungsmessung ist aus - wer sie nicht benutzt, soll keine
+ * Abfrage an seinen Miniserver bekommen -, Befehle ueber MQTT und die
+ * Anwesenheit ebenso. SEIT 0.9.31 (Gruppe 23, Entscheidung 3 E5) ist MQTT
+ * bei einer NEUINSTALLATION an: es ist der Hauptweg nach Loxone; eine
+ * Bestandsdatei behaelt ihren Wert (bw_uebergang()). Der HTTP-Lesezweig des
+ * Endpunkts (endpunkt_ein) ist bei einer Neuinstallation aus und bei einem
+ * Update an (bw_uebergang(), postupgrade.sh).
  */
 function bw_vorgaben()
 {
@@ -257,7 +262,8 @@ function bw_vorgaben()
         'abstand'      => 60,
         'timeout'      => 5,
         'aktionstoken' => '',
-        'mqtt_ein'     => 0,
+        /* Seit 0.9.31 ab Werk 1 (Neuinstallation); Bestand siehe bw_uebergang(). */
+        'mqtt_ein'     => 1,
         'mqtt_thema'   => 'beschattung',
         'pruefen_ein'  => 0,
         /* Wetter-1 (Verbesserungsbau 30.09.2026), AB WERK AUS: die
@@ -281,6 +287,13 @@ function bw_vorgaben()
         'fassade4'     => '',
         'fassade5'     => '',
         'fassade6'     => '',
+        /* Gruppe 23 (0.9.31): der HTTP-Lesezweig des Endpunkts (status, json) - ab Werk aus, nach einem Update an
+           (bw_uebergang(), postupgrade.sh); Befehle ueber MQTT (Befehlsbruecke 1.0.1, Abschnitt K) ab Werk aus;
+           Anwesenheit (V3, haus/anwesenheit/jemand, Abschnitt L) ab Werk aus, Frist in Minuten. */
+        'endpunkt_ein'     => 0,
+        'befehle_mqtt_ein' => 0,
+        'anwesend_ein'     => 0,
+        'anwesend_frist'   => 10,
     );
 }
 
@@ -288,13 +301,16 @@ function bw_vorgaben()
  * Schluessel, die eine Sicherung aus einer frueheren Fassung noch nicht
  * kennt (Wetter-1, Verbesserungsbau 30.09.2026). Fehlen sie in der Datei,
  * gilt ihre Vorgabe (ab Werk aus), und die Meldung sagt es - jeder andere
- * fehlende Schluessel bleibt eine Beanstandung.
+ * fehlende Schluessel bleibt eine Beanstandung. Fuer die Schluessel aus
+ * bw_sicherung_geltend() gilt statt der Vorgabe der GELTENDE Wert (Gruppe 23).
  */
 function bw_sicherung_spaeter()
 {
-    /* Sonne-1 (01.10.2026): dazu der Haken und die Zuordnung der Fassaden. */
+    /* Sonne-1 (01.10.2026): dazu der Haken und die Zuordnung der Fassaden.
+       Gruppe 23 (0.9.31): die vier neuen Schluessel (N15, E-E14). */
     return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max',
-                 'sonne_ein', 'fassade', 'fassade2', 'fassade3', 'fassade4', 'fassade5', 'fassade6');
+                 'sonne_ein', 'fassade', 'fassade2', 'fassade3', 'fassade4', 'fassade5', 'fassade6',
+                 'endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist');
 }
 
 /** Die Kennungen und Befehle aller eingerichteten Ziele, in ihrer Reihenfolge. */
@@ -368,7 +384,13 @@ function bw_wert_pruefen($schluessel, $wert)
         case 'pruefen_ein':
         case 'wetter_ein':
         case 'sonne_ein':
+        case 'endpunkt_ein':
+        case 'befehle_mqtt_ein':
+        case 'anwesend_ein':
             return $s === '0' || $s === '1';
+        case 'anwesend_frist':
+            /* Gruppe 23 (V3): ganze Minuten 5 bis 120. */
+            return preg_match('/^[0-9]{1,3}$/', $s) === 1 && (int) $s >= 5 && (int) $s <= 120;
         case 'ms':
             return preg_match('/^[0-9]{1,3}$/', $s) === 1;
         case 'ms_nr':
@@ -616,8 +638,15 @@ function bw_config($erzeugen = true)
     }
 
     if (is_array($d)) {
+        /* DIE LESE-REGEL (Gruppe 23, E-E12/E-E13): fehlt einer Datei MIT Inhalt endpunkt_ein, gilt 1, fehlt mqtt_ein,
+           gilt 0 (bw_uebergang()). Der Schluessel bleibt "fehlend" - die Vervollstaendigung unten schreibt ihn
+           dann mit diesem Wert, nicht mit der Vorgabe. */
+        $bw_u = bw_uebergang($d);
         foreach ($c as $k => $v) {
             if (!array_key_exists($k, $d)) {
+                if (array_key_exists($k, $bw_u)) {
+                    $c[$k] = $bw_u[$k];
+                }
                 $fehlend[] = $k;
                 continue;
             }
@@ -673,7 +702,9 @@ function bw_config($erzeugen = true)
      * still als 06:00, und im kopflosen Betrieb sagte das niemandem etwas.
      * Ueberschrieben wird der Wert weiterhin nicht: gemeldet ist gemeldet,
      * und die Vorgabe daraufzuschreiben verdeckte den Fehler erst recht. */
-    if ($verworfen) {
+    /* B22 (Gruppe 23): nur mit $erzeugen - bw_config(false) aus uninstall (als root), Healthcheck, Endpunkt und
+       Bruecke schreibt keine Protokollzeile und legt keinen Merker an. */
+    if ($verworfen && $erzeugen) {
         bw_log_wenn_neu('verworfen',
             'In der Konfiguration stehen unzulaessige Werte; es gelten dafuer die '
             . 'Vorgaben: ' . implode(', ', $verworfen));
@@ -848,7 +879,11 @@ function bw_log_wenn_neu($merker, $text, $sekunden = 3600)
  * Gegenstelle wartet, und das tut dieser Lauf.
  *
  * Rueckgabe: die offene Datei (der Aufrufer muss sie halten, sonst faellt die
- * Sperre) oder false.
+ * Sperre) oder false. SEIT 0.9.31 (Gruppe 23, B15/N10) unterscheidet
+ * bw_sperre_lage(), WARUM false kam: 'belegt' (ein anderer Lauf haelt sie)
+ * oder 'rechte' (die Datei laesst sich nicht oeffnen - etwa root-eigen nach
+ * einem Handlauf als root). Bis 0.9.30 meldete der Takt beides als "ein
+ * anderer Lauf ist noch unterwegs" und sendete nie wieder (Pruefbericht B15).
  */
 function bw_sperre()
 {
@@ -856,14 +891,20 @@ function bw_sperre()
     if (!is_dir($p['datadir'])) {
         @mkdir($p['datadir'], 0775, true);
     }
-    $fh = @fopen($p['datadir'] . '/lauf.lock', 'c');
+    $f = $p['datadir'] . '/lauf.lock';
+    $fh = @fopen($f, 'c');
     if ($fh === false) {
+        bw_sperre_lage('rechte');
+        bw_log_wenn_neu('sperre', 'lauf.lock laesst sich nicht oeffnen (Rechte?) - bitte Datei ' . $f
+            . ' entfernen; bis dahin sendet der Takt nicht.');
         return false;
     }
     if (!flock($fh, LOCK_EX | LOCK_NB)) {
         fclose($fh);
+        bw_sperre_lage('belegt');
         return false;
     }
+    bw_sperre_lage('frei');
     return $fh;
 }
 
@@ -1065,6 +1106,12 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
         list($code, $antwort) = bw_http_ohne_curl($url, $kopf, $frist);
     }
 
+    /* N3 (Gruppe 23): traegt der Rumpf einen LL-Code (Code="200"), zaehlt er - ein unbekannter Befehl kann mit
+       HTTP 200 und einem anderen LL-Code beantwortet werden. Ohne LL-Code wie bisher nur der HTTP-Code. */
+    $bw_ll = ($code >= 200 && $code < 300) ? bw_ll_code($antwort) : 0;
+    if ($bw_ll > 0 && ($bw_ll < 200 || $bw_ll >= 300)) {
+        $code = $bw_ll;
+    }
     /* Die Adresse OHNE Zugangsdaten zurueckgeben - sie landet im Protokoll
        und in der Oberflaeche. */
     return array(
@@ -1363,12 +1410,21 @@ function bw_sicherung_lesen($roh, &$namen = null)
      * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
     $fehlend = array();
     $spaeter = array();
+    $geltend = array();
     foreach (array_keys(bw_vorgaben()) as $fk) {
         if (!array_key_exists($fk, $daten)) {
             /* Ein Schluessel, den eine fruehere Fassung nicht kannte, darf
                fehlen: dann gilt seine Vorgabe (Wetter-1 ab Werk aus). */
             if (in_array($fk, bw_sicherung_spaeter(), true)) {
-                $spaeter[] = $fk;
+                /* Gruppe 23 (N15, E-E14): fuer die vier Schluessel der 0.9.31 gilt der GELTENDE Wert, nicht die
+                   Vorgabe - sonst schaltete eine 0.9.30-Sicherung den HTTP-Lesezweig einer Bestandsanlage ab. */
+                if (in_array($fk, bw_sicherung_geltend(), true)) {
+                    $bw_gilt = bw_config(false);
+                    $neu[$fk] = $bw_gilt[$fk];
+                    $geltend[] = $fk;
+                } else {
+                    $spaeter[] = $fk;
+                }
                 continue;
             }
             $fehlend[] = $fk;
@@ -1377,6 +1433,10 @@ function bw_sicherung_lesen($roh, &$namen = null)
     if ($spaeter) {
         $hinweise[] = sprintf(bw_t('TEXT.SICH_SPAETER'),
             htmlspecialchars(implode(', ', $spaeter), ENT_QUOTES, 'UTF-8'));
+    }
+    if ($geltend) {
+        $hinweise[] = sprintf(bw_t('TEXT.SICH_SPAETER_GELTEND'),
+            htmlspecialchars(implode(', ', $geltend), ENT_QUOTES, 'UTF-8'));
     }
     if ($fehlend) {
         $mangel[] = sprintf(bw_t('TEXT.SICH_FEHLEND'), count($fehlend),
@@ -1612,7 +1672,8 @@ function bw_felder()
            regulaer viele Stunden alt. Die Grenze ist weit: ein Takt, der
            tagelang steht, darf in Loxone nicht an MaxVal auf 0 fallen und
            damit wie ein frischer aussehen (Regeln/07, "MaxVal ist eine
-           Validierungsgrenze"). Geht wie ALTER nur ueber HTTP (bw_nur_http()). */
+           Validierungsgrenze"). Geht nur ueber HTTP (bw_nur_http()); ALTER geht seit
+           0.9.31 auch ueber MQTT (Thema alter, Gruppe 23 E-E10). */
         'LAUFALTER' => array('bez' => 'FELD.LAUFALTER', 'kurz' => 'FELDKURZ.LAUFALTER', 'einheit' => 's', 'min' => -1, 'max' => 99999999, 'zeile' => 1),
     );
 }
@@ -1662,11 +1723,11 @@ function bw_werte(?array $c = null, ?array $stand = null)
        Alter des letzten BEFEHLS. */
     $ok = (!empty($lauf['ok']) && $laufalter >= 0 && $laufalter <= bw_ok_grenze()
            && !bw_zaehlung_misslungen($c, $stand)) ? 1 : 0;
-    /* OHNE MESSUNG EIN STRICH (C3, Entscheidung 5 vom 29.09.2026): nie
-       gemessen oder die Zaehlung abgeschaltet - dann gibt es keine Aussage,
-       und eine -1 oder ein stehengebliebener Altwert saehe aus wie eine. Bis
-       0.9.21 ging hier -1 bzw. der letzte gemessene Wert hinaus, auch nach
-       dem Abschalten. */
+    /* OHNE MESSUNG -1 (seit 0.9.31, Entscheidung E3 vom 25.10.2026; Hausform Docker E4, Nr. 15 "als Zahlenthema
+       ... -1"): nie gemessen oder die Zaehlung abgeschaltet - dann gibt es keine Aussage, und Loxone liest -1 als
+       "keine Aussage" (Musterprojekt #3/#4 MinVal -1, #23 erste Zeile "V1 < 1"). E3 loest "Entscheidung 5 vom
+       29.09.2026" ab, die hier einen Strich verlangte; der Strich passte in kein Zahlenthema und ging retained in
+       den Broker. EINE Quelle fuer HTTP (SCHARF=-1) und MQTT (retain .../scharf -1). */
     $gemessen = bw_zaehlung_gilt($c, $stand);
     return array(
         'OK'          => $ok,
@@ -1678,8 +1739,8 @@ function bw_werte(?array $c = null, ?array $stand = null)
         'CODE'        => isset($stand['code']) ? (int) $stand['code'] : 0,
         'ALTER'       => $letzte > 0 ? (time() - $letzte) : -1,
         'ZAEHLER'     => isset($lauf['zaehler']) ? (int) $lauf['zaehler'] : -1,
-        'SCHARF'      => $gemessen ? (int) $stand['scharf'] : '-',
-        'AUTOMATIKEN' => $gemessen ? (int) $stand['automatiken'] : '-',
+        'SCHARF'      => $gemessen ? (int) $stand['scharf'] : -1,
+        'AUTOMATIKEN' => $gemessen ? (int) $stand['automatiken'] : -1,
         'LAUFALTER'   => $laufalter,
     );
 }
@@ -1695,13 +1756,16 @@ function bw_ok_grenze()
 }
 
 /**
- * Die Felder, die nur ueber HTTP hinausgehen: sie aendern sich jede Sekunde
- * und machten jeden Doppelt-senden-Filter wirkungslos; ueber MQTT sagt der
- * Zeitstempel dasselbe, und der Miniserver rechnet selbst.
+ * Die Felder, die nur ueber HTTP hinausgehen. SEIT 0.9.31 (Gruppe 23, E4,
+ * E-E10) nur noch LAUFALTER: ueber MQTT waere es beim Senden immer ~0, und
+ * steht der Takt, kommt gar nichts - die Ausfallerkennung geht an
+ * status/zaehler. ALTER (Sekunden seit dem letzten BEFEHL) geht als
+ * fluechtiges Thema "alter" in jedem Takt hinaus und ist damit hoechstens
+ * fuenf Minuten alt.
  */
 function bw_nur_http()
 {
-    return array('ALTER', 'LAUFALTER');
+    return array('LAUFALTER');
 }
 
 /** Gilt die Zaehlung? Eingeschaltet UND schon einmal gemessen (C3). */
@@ -2005,8 +2069,9 @@ function bw_mqtt_senden($port, array $zeilen)
  * Zeitstempel." Die Altwerte raeumt bw_mqtt_publish() ab, solange
  * bw_mqtt_altlast() sie meldet.
  *
- * ALTER geht ueber MQTT gar nicht hinaus und steht deshalb nicht in der
- * Tabelle.
+ * ALTER geht seit 0.9.31 als Thema "alter" FLUECHTIG hinaus (Messwert mit
+ * Zeitbezug, Gruppe 23 E-E10) und steht deshalb nicht in der Tabelle;
+ * LAUFALTER geht nur ueber HTTP.
  *
  * Ein Thema OHNE Eintrag geht fluechtig. Das ist die sichere Richtung: ein
  * nicht zurueckbehaltener Zustand ist unbequem, ein zurueckbehaltener Wert,
@@ -2439,30 +2504,6 @@ function bw_mqtt_altlast($praefix)
     return array('lage' => 'unbekannt', 'themen' => $liste);
 }
 
-/** NUR die drei Lebenszeichen - fuer einen Lauf, der sonst nichts zu sagen hat. */
-function bw_mqtt_lebenszeichen(?array $c = null)
-{
-    if ($c === null) { $c = bw_config(); }
-    if (empty($c['mqtt_ein'])) { return 0; }
-    $gw = bw_mqtt_gateway_info();
-    if ($gw === null || $gw['udpport'] === 0) { return 0; }
-    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
-    /* Kein Abraeumen und keine Rueckfrage beim Broker hier: dieser Lauf
-       schickt ok, fehler, code und fenster
-       nicht mit, und eine leere Nachricht ohne den gueltigen Wert dahinter
-       kaeme am Miniserver als leerer Wert an (Regeln/07). Abgeraeumt wird im
-       Vollversand, bw_mqtt_publish(). */
-    $lauf = bw_lauf_lesen();
-    /* Dieselbe Tabelle wie oben - seit 0.9.19 geht status/ok auch hier
-       fluechtig hinaus. Wer die Entscheidung am AUFRUF traefe, haette sie
-       hier anders treffen koennen als vier Zeilen weiter oben. */
-    return bw_mqtt_senden($gw['udpport'], array(
-        bw_mqtt_zeile($w, 'status/ts', (int) $lauf['ts']),
-        bw_mqtt_zeile($w, 'status/zaehler', (int) $lauf['zaehler']),
-        bw_mqtt_zeile($w, 'status/ok', (int) $lauf['ok']),
-    ));
-}
-
 /**
  * Die Themen, die die Deinstallation leert: jedes, das eine veroeffentlichte
  * Fassung je retained gesendet hat - die Tabelle bw_mqtt_retain() und die
@@ -2836,23 +2877,31 @@ function bw_endpunkt_pfad(array $werte, $roh = false)
  *    der eigenen Anlage misst. Gemessen ist besser als vermutet.
  * ================================================================== */
 
-/** Die Strukturdatei holen. Rueckgabe: array(ok, Meldung, controls). */
-function bw_struktur_holen(array $c)
+/**
+ * Die Strukturdatei holen. Rueckgabe: array(ok, Meldung, controls).
+ *
+ * EINMAL JE PROZESS (b1, Verbesserungsbau 30.09.2026): der Takt liest vor
+ * einem Befehl die Positionen und zaehlt danach die Automatiken - beides aus
+ * derselben Strukturdatei. Gemerkt wird nur ein Erfolg, je Adresse und
+ * Benutzer (bw_struktur_merk()); jede Anfrage an Oberflaeche oder Endpunkt ist
+ * ein eigener Prozess und holt neu. $frisch = true (Gruppe 23, N4) verwirft
+ * den Merker fuer diese Adresse: der Brueckendienst laeuft Tage, und nach
+ * einem Upload in Loxone zaehlte er sonst mit alten Kennungen.
+ */
+function bw_struktur_holen(array $c, $frisch = false)
 {
-    /* EINMAL JE PROZESS (b1, Verbesserungsbau 30.09.2026): der Takt liest vor
-       einem Befehl die Positionen und zaehlt danach die Automatiken - beides
-       aus derselben Strukturdatei. Gemerkt wird nur ein Erfolg, je Adresse
-       und Benutzer; jede Anfrage an Oberflaeche oder Endpunkt ist ein eigener
-       Prozess und holt neu. */
-    static $bw_merk = array();
     $m = bw_miniserver_gewaehlt($c);
     if ($m === null) {
         return array(0, bw_t('TEXT.KEIN_MS'), array());
     }
     $url = 'http://' . $m['adresse'] . ':' . $m['port'] . '/data/LoxAPP3.json';
     $bw_mk = $url . '|' . $m['user'];
-    if (isset($bw_merk[$bw_mk])) {
-        return $bw_merk[$bw_mk];
+    if ($frisch) {
+        bw_struktur_merk($bw_mk, null, true);
+    }
+    $bw_alt = bw_struktur_merk($bw_mk);
+    if ($bw_alt !== null) {
+        return $bw_alt;
     }
     $kopf = array('Accept: application/json');
     if ($m['user'] !== '') {
@@ -2875,8 +2924,7 @@ function bw_struktur_holen(array $c)
     if (!is_array($d) || !isset($d['controls']) || !is_array($d['controls'])) {
         return array(0, bw_t('TEXT.STRUKTUR_FORM'), array());
     }
-    $bw_merk[$bw_mk] = array(1, '', $d);
-    return $bw_merk[$bw_mk];
+    return bw_struktur_merk($bw_mk, array(1, '', $d));
 }
 
 /**
@@ -2885,9 +2933,18 @@ function bw_struktur_holen(array $c)
  * Rueckgabe: array(ok, Meldung, array(scharf, gesamt, zeilen)).
  * 'zeilen' traegt je Baustein Name, Raum, Zustand und den Klartext des
  * Miniservers - dieser Klartext ist die eigentliche Auskunft.
+ *
+ * $nur_aktiv (Gruppe 23, B23/E-E8, N12): der Takt und die Befehlsbruecke lesen
+ * NUR autoActive - 1 + 40 statt 1 + 3 x 40 Anfragen bei gleichem Ergebnis
+ * (Entwurf probe_ms). Dann bricht die Zaehlung nach drei Fehlschlaegen in
+ * Folge ab ("misslungen") statt 40 Fristen abzuwarten. Der Knopf
+ * "Automatiken zaehlen" im Reiter Test liest weiter alle drei Zustaende - dort
+ * will man den Grund lesen. $frist_gesamt (Sekunden, 0 = keine): danach wird
+ * nicht weiter gefragt, die Zaehlung gilt als misslungen.
  */
-function bw_automatiken(array $c, $hoechstens = 40)
+function bw_automatiken(array $c, $hoechstens = 40, $nur_aktiv = false, $frist_gesamt = 0)
 {
+    $start = microtime(true);
     list($ok, $meldung, $d) = bw_struktur_holen($c);
     if (!$ok) {
         return array(0, $meldung, array('scharf' => -1, 'gesamt' => -1, 'zeilen' => array()));
@@ -2910,6 +2967,8 @@ function bw_automatiken(array $c, $hoechstens = 40)
     $zeilen = array();
     $scharf = 0;
     $gesamt = 0;
+    $fehl_folge = 0;
+    $leer = array('scharf' => -1, 'gesamt' => -1, 'zeilen' => array());
     foreach ($d['controls'] as $uuid => $b) {
         if (!is_array($b) || (string) (isset($b['type']) ? $b['type'] : '') !== 'Jalousie') {
             continue;
@@ -2919,12 +2978,27 @@ function bw_automatiken(array $c, $hoechstens = 40)
             continue;      /* kein Beschattungsbaustein - zaehlt nicht mit */
         }
         if ($gesamt >= $hoechstens) { break; }
+        if ($frist_gesamt > 0 && microtime(true) - $start > $frist_gesamt) {
+            return array(0, sprintf(bw_t('TEXT.ZAEHLEN_FRIST'), (int) $frist_gesamt), $leer);
+        }
         $gesamt++;
         $wert = bw_zustand_lesen($m, $kopf, (string) $z['autoActive'], (int) $c['timeout']);
-        $erlaubt = isset($z['autoAllowed'])
-            ? bw_zustand_lesen($m, $kopf, (string) $z['autoAllowed'], (int) $c['timeout']) : null;
-        $grund = isset($z['autoInfoText'])
-            ? bw_zustand_lesen($m, $kopf, (string) $z['autoInfoText'], (int) $c['timeout']) : null;
+        if ($nur_aktiv) {
+            if ($wert === null) {
+                if (++$fehl_folge >= 3) {
+                    return array(0, bw_t('TEXT.ZAEHLEN_STUMM'), $leer);
+                }
+            } else {
+                $fehl_folge = 0;
+            }
+            $erlaubt = null;
+            $grund = null;
+        } else {
+            $erlaubt = isset($z['autoAllowed'])
+                ? bw_zustand_lesen($m, $kopf, (string) $z['autoAllowed'], (int) $c['timeout']) : null;
+            $grund = isset($z['autoInfoText'])
+                ? bw_zustand_lesen($m, $kopf, (string) $z['autoInfoText'], (int) $c['timeout']) : null;
+        }
         if ($wert === '1' || $wert === '1.0' || (is_numeric($wert) && (float) $wert >= 0.5)) {
             $scharf++;
             $an = 1;
@@ -2949,8 +3023,7 @@ function bw_automatiken(array $c, $hoechstens = 40)
     if ($gesamt === 0) {
         /* Eine Zeile, die ueber eine LEERE Menge urteilt, sagt nichts.
            "0 von 0 scharf" ist kein Haken. */
-        return array(0, bw_t('TEXT.KEINE_JALOUSIEN'),
-                     array('scharf' => -1, 'gesamt' => -1, 'zeilen' => array()));
+        return array(0, bw_t('TEXT.KEINE_JALOUSIEN'), $leer);
     }
     return array(1, '', array('scharf' => $scharf, 'gesamt' => $gesamt, 'zeilen' => $zeilen));
 }
@@ -3335,9 +3408,11 @@ function bw_befund(?array $c = null)
        Stufe 3 oder 4 - cron.daily startet 02-pluginsupdate und
        03-healthcheck gleichzeitig, und healthcheck.pl legt das Ergebnis
        retained in den Broker (Pruefbericht Installer I4). */
-    $marke = $p['lbhome'] !== ''
-        ? $p['lbhome'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft' : '';
-    if ($marke !== '' && is_file($marke)) {
+    /* B18 (Gruppe 23): nur eine GUELTIGE Marke (-300 ... 3600 s, bw_marke_gilt()). Eine liegengebliebene Marke
+       eines abgebrochenen Updates hielt den Befund bis 0.9.30 fuer immer auf "wird aktualisiert"; jetzt wird
+       normal bewertet, und der Reiter Test nennt die Marke. */
+    $marke = bw_marke_pfad();
+    if ($marke !== '' && bw_marke_gilt($marke)) {
         return array(6, bw_t('BEFUND.UPDATE_LAEUFT'));
     }
 
@@ -3345,6 +3420,10 @@ function bw_befund(?array $c = null)
         ? $p['lbhome'] . '/system/cron/cron.05min/' . $p['plugin'] : '';
     if ($cron !== '' && !is_file($cron)) {
         return array(3, sprintf(bw_t('BEFUND.CRON'), bw_e($cron)));
+    }
+    /* N10 (Gruppe 23, B15): ein root-eigenes lauf.lock legt den Takt still - "Sperrdatei nicht beschreibbar". */
+    if (bw_sperrdatei_lage() === 'rechte') {
+        return array(3, sprintf(bw_t('BEFUND.SPERRDATEI'), bw_e($p['datadir'] . '/lauf.lock')));
     }
     if (!bw_miniserver()) {
         return array(3, bw_t('BEFUND.KEIN_MS'));
@@ -3739,6 +3818,8 @@ function bw_einmal_lesen()
         $aus['zaehlung'] = $d['zaehlung'];
     }
     $aus['tab'] = (isset($d['tab']) && is_string($d['tab'])) ? $d['tab'] : '';
+    /* Gruppe 23 (V4): die vorgeschlagenen Jalousie-Bausteine - nur, was bw_vorschlag_pruefen() durchlaesst. */
+    $aus['vorschlag'] = isset($d['vorschlag']) ? bw_vorschlag_pruefen($d['vorschlag']) : null;
     /* X-2: die eingetippten Werte nach einer Beanstandung - nur, was
        bw_eingaben_pruefen() durchlaesst. */
     $aus['eingaben'] = isset($d['eingaben']) ? bw_eingaben_pruefen($d['eingaben']) : null;
@@ -3768,13 +3849,15 @@ function bw_eingabe_felder($form)
             'text'   => array_merge(array('ms_nr', 'uuid', 'befehl'), $ziele,
                                     array('von', 'bis', 'abstand', 'sonne_min', 'wind_max'),
                                     array('fassade', 'fassade2', 'fassade3', 'fassade4',
-                                          'fassade5', 'fassade6')),
-            'haken'  => array('aktiv', 'pruefen_ein', 'wetter_ein', 'sonne_ein'),
+                                          'fassade5', 'fassade6'),
+                                    array('anwesend_frist')),
+            'haken'  => array('aktiv', 'pruefen_ein', 'wetter_ein', 'sonne_ein', 'anwesend_ein'),
+            /* Das Wortzeichen (B9, Passwortfeld) reist nie mit und wird nur markiert. */
             'geheim' => array('wetter_token'),
         ),
         'mqtt' => array(
             'text'   => array('mqtt_thema'),
-            'haken'  => array('mqtt_ein'),
+            'haken'  => array('mqtt_ein', 'befehle_mqtt_ein'),
             'geheim' => array(),
         ),
     );
@@ -3945,7 +4028,9 @@ function bw_endpunkt_probe($token)
  * die Pruefung"): jedes gelistete Thema wird gesendet, und jedes gesendete
  * steht in der Liste. Verglichen wird bw_mqtt_themen() mit dem, was
  * bw_mqtt_werte() fuer einen Vollversand und bw_mqtt_zustaende_themen() fuer
- * den Aenderungsversand bilden - ohne zu senden.
+ * den Aenderungsversand bilden - ohne zu senden. Seit 0.9.31 (Gruppe 23, 2.5)
+ * dazu die Namenstabelle: jeder Gateway-Name entsteht aus einem gesendeten
+ * Thema, und jedes gesendete Thema hat genau einen Namen.
  * Rueckgabe array(ok, Zahl gelistet, Zahl gesendet, nur gelistet, nur gesendet).
  */
 function bw_mqtt_themen_pruefen(array $c)
@@ -3961,6 +4046,21 @@ function bw_mqtt_themen_pruefen(array $c)
     }
     $nur_liste = array_values(array_diff($liste, $senden));
     $nur_senden = array_values(array_diff($senden, $liste));
+    $namen = array();
+    foreach (bw_mqtt_namenstabelle($c) as $z) {
+        $namen[] = $z['thema'];
+        if ($z['name'] !== bw_gateway_name($w, $z['thema'])) {
+            $nur_liste[] = $z['name'];
+        }
+    }
+    foreach (array_diff($senden, $namen) as $t) {
+        $nur_senden[] = $t;
+    }
+    if (count(array_unique($namen)) !== count($namen)) {
+        $nur_liste[] = 'Namenstabelle doppelt';
+    }
+    $nur_liste = array_values(array_unique($nur_liste));
+    $nur_senden = array_values(array_unique($nur_senden));
     $ok = ($liste && $senden && !$nur_liste && !$nur_senden);
     return array($ok, count($liste), count($senden), $nur_liste, $nur_senden);
 }
@@ -4736,11 +4836,20 @@ function bw_sonne_merken($id, array $hoerer, $satz = null)
 }
 
 /**
- * Der Begleitprozess (bw_lauf.php --sonne-hoeren <kennung>): am Broker
- * haus/sonne/# abonnieren (QoS 0) und jeden vollstaendigen Satz ablegen.
- * MQTT 3.1.1 von Hand wie bw_mqtt_behalten_liste(), ohne fremde Bibliothek.
- * Endet, sobald die Kennung nicht mehr gilt, der Haken aus ist (Pruefung
- * jede Minute), die Verbindung reisst oder $dauer um ist.
+ * Der Begleitprozess (bw_lauf.php --sonne-hoeren <kennung>), seit 0.9.31 der
+ * "Haus-Hoerer" (Gruppe 23, V3, E-E5): am Broker haus/sonne/# (nur mit
+ * sonne_ein) und die genauen Themen haus/anwesenheit/jemand und
+ * haus/anwesenheit/zaehler (nur mit anwesend_ein, nie "#") abonnieren (QoS 0),
+ * jeden vollstaendigen Satz der Fensterbilanz in data/sonne.json und jede
+ * Nachricht der Anwesenheit in data/anwesenheit.json ablegen - beides nur,
+ * solange die Kennung gilt. Das Retain-Merkmal jeder Nachricht wird
+ * ausgewertet (Kopfbyte & 1): ein zurueckbehaltener Zaehler gilt nie als
+ * Lebenszeichen (Nr. 15). MQTT 3.1.1 von Hand wie bw_mqtt_behalten_liste(),
+ * ohne fremde Bibliothek. Endet, sobald die Kennung nicht mehr gilt, beide
+ * Haken aus sind (Pruefung jede Minute), die Verbindung reisst oder $dauer um
+ * ist. Ein abgekoppelter Leser wie dieser verpasst einen Zaehler mit fester
+ * Sendesekunde nicht (Gruppe 22, phase_e4) - die Luecke liegt nur zwischen dem
+ * Ende des alten und dem SUBACK des neuen Hoerers.
  * Rueckgabe: 0 regulaer beendet, 1 Broker nicht zu erreichen/abgewiesen/
  * getrennt, 2 Kennung ungueltig.
  */
@@ -4751,16 +4860,22 @@ function bw_sonne_hoeren($id, $dauer = null)
     if (preg_match('/^[0-9a-f]{16}\z/', $id) !== 1 || !bw_sonne_hoerer_gilt($id)) {
         return 2;
     }
+    $c0 = bw_config(false);
+    $mit_sonne = !empty($c0['sonne_ein']);
+    $mit_anw = !empty($c0['anwesend_ein']);
+    if (!$mit_sonne && !$mit_anw) {
+        return 0;
+    }
     $start = time();
     $z = array('id' => $id, 'pid' => getmypid(), 'start' => $start, 'verbunden' => 0, 'grund' => '',
-               'code' => 0, 'nachrichten' => 0, 'saetze' => 0, 'ende' => 0);
+               'code' => 0, 'nachrichten' => 0, 'saetze' => 0, 'anwesenheit' => 0, 'ende' => 0);
     $b = bw_sonne_broker();
     if ($b === null) {
         $z['grund'] = 'KEIN_BROKER';
         $z['ende'] = time();
         bw_sonne_merken($id, $z);
         bw_log_wenn_neu('sonne_hoerer_broker',
-            'Sonne-1: in der general.json steht kein MQTT-Broker - der Sonnenstand der Fensterbilanz ist nicht '
+            'Haus-Hoerer: in der general.json steht kein MQTT-Broker - Sonnenstand und Anwesenheit sind nicht '
             . 'zu lesen; es gilt das bisherige Verhalten.');
         return 1;
     }
@@ -4772,9 +4887,9 @@ function bw_sonne_hoeren($id, $dauer = null)
         $z['ende'] = time();
         bw_sonne_merken($id, $z);
         bw_log_wenn_neu('sonne_hoerer_stumm',
-            'Sonne-1: der MQTT-Broker ' . $b['host'] . ':' . $b['port'] . ' antwortet nicht (' . $etxt
+            'Haus-Hoerer: der MQTT-Broker ' . $b['host'] . ':' . $b['port'] . ' antwortet nicht (' . $etxt
             . ') - es gilt das bisherige Verhalten, sobald der letzte Satz aelter als '
-            . (int) round(bw_sonne_frist() / 60) . ' Minuten ist.');
+            . (int) round(bw_sonne_frist() / 60) . ' Minuten ist bzw. die Anwesenheit schweigt.');
         return 1;
     }
     stream_set_timeout($s, 5);
@@ -4855,12 +4970,22 @@ function bw_sonne_hoeren($id, $dauer = null)
         fclose($s);
         bw_sonne_merken($id, $z);
         bw_log_wenn_neu('sonne_hoerer_anmeldung',
-            'Sonne-1: der MQTT-Broker hat die Anmeldung abgewiesen (CONNACK ' . (int) $z['code']
+            'Haus-Hoerer: der MQTT-Broker hat die Anmeldung abgewiesen (CONNACK ' . (int) $z['code']
             . ') - Brokeruser/Brokerpass in der general.json pruefen; es gilt das bisherige Verhalten.');
         return 1;
     }
-    $filter = bw_sonne_stamm() . '/#';
-    $sub = pack('n', 1) . $zk($filter) . chr(0);
+    $filter = array();
+    if ($mit_sonne) {
+        $filter[] = bw_sonne_stamm() . '/#';
+    }
+    if ($mit_anw) {
+        $filter[] = bw_anwesend_stamm() . '/jemand';
+        $filter[] = bw_anwesend_stamm() . '/zaehler';
+    }
+    $sub = pack('n', 1);
+    foreach ($filter as $f) {
+        $sub .= $zk($f) . chr(0);
+    }
     @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
     $suback = null;
     $bis = microtime(true) + 5.0;
@@ -4873,14 +4998,21 @@ function bw_sonne_hoeren($id, $dauer = null)
             $suback = (string) substr($pk[1], 2);
         }
     }
-    if ($suback === null || strlen($suback) !== 1 || ord($suback[0]) >= 0x80) {
+    $abgelehnt = ($suback === null || strlen($suback) !== count($filter));
+    for ($i = 0; !$abgelehnt && $i < strlen($suback); $i++) {
+        if (ord($suback[$i]) >= 0x80) {
+            $abgelehnt = true;
+        }
+    }
+    if ($abgelehnt) {
         $z['grund'] = 'ABGELEHNT';
         $z['ende'] = time();
         @fwrite($s, chr(0xE0) . chr(0));
         fclose($s);
         bw_sonne_merken($id, $z);
         bw_log_wenn_neu('sonne_hoerer_abo',
-            'Sonne-1: der MQTT-Broker hat das Abo ' . $filter . ' abgelehnt - es gilt das bisherige Verhalten.');
+            'Haus-Hoerer: der MQTT-Broker hat das Abo ' . implode(', ', $filter) . ' abgelehnt - es gilt das '
+            . 'bisherige Verhalten.');
         return 1;
     }
     $z['verbunden'] = time();
@@ -4890,6 +5022,7 @@ function bw_sonne_hoeren($id, $dauer = null)
     $id_pruef = 0;
     $cfg_pruef = time();
     $stamm = bw_sonne_stamm() . '/';
+    $astamm = bw_anwesend_stamm() . '/';
     while (time() - $start < $dauer) {
         if (time() - $id_pruef >= 1) {
             $id_pruef = time();
@@ -4900,7 +5033,9 @@ function bw_sonne_hoeren($id, $dauer = null)
         if (time() - $cfg_pruef >= 60) {
             $cfg_pruef = time();
             $cc = bw_config(false);
-            if (empty($cc['sonne_ein'])) {
+            $mit_sonne = $mit_sonne && !empty($cc['sonne_ein']);
+            $mit_anw = $mit_anw && !empty($cc['anwesend_ein']);
+            if (!$mit_sonne && !$mit_anw) {
                 break;
             }
         }
@@ -4934,7 +5069,17 @@ function bw_sonne_hoeren($id, $dauer = null)
         $t = (string) substr($pk[1], 2, $tl[1]);
         $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
         $wert = (string) substr($pk[1], $versatz);
-        if (strncmp($t, $stamm, strlen($stamm)) !== 0 || strlen($wert) > 512) {
+        if (strlen($wert) > 512) {
+            continue;
+        }
+        if (strncmp($t, $astamm, strlen($astamm)) === 0) {
+            if ($mit_anw) {
+                $z['anwesenheit']++;
+                bw_anwesend_ablegen($id, $t, $wert, ($pk[0] & 1) === 1, time());
+            }
+            continue;
+        }
+        if (!$mit_sonne || strncmp($t, $stamm, strlen($stamm)) !== 0) {
             continue;
         }
         $z['nachrichten']++;
@@ -4957,7 +5102,7 @@ function bw_sonne_hoeren($id, $dauer = null)
     $z['ende'] = time();
     if ($z['grund'] === 'GETRENNT') {
         bw_log_wenn_neu('sonne_hoerer_getrennt',
-            'Sonne-1: die Verbindung zum MQTT-Broker riss ab - der naechste Takt hoert neu mit.');
+            'Haus-Hoerer: die Verbindung zum MQTT-Broker riss ab - der naechste Takt hoert neu mit.');
     }
     bw_sonne_merken($id, $z);
     return $z['grund'] === '' ? 0 : 1;
@@ -5050,4 +5195,806 @@ function bw_sonne_pruefzeilen(array $c, $jetzt = null)
     }
     $zeilen[] = array($zt, $fremd ? 0 : 1, $text);
     return $zeilen;
+}
+
+/* ==================================================================
+ * K. HAUSFORM 0.9.31 (Gruppe 23, 25.10.2026): Lese-Regel, Sperre,
+ *    Upgrade-Marke, Gateway-Namen, eine Stelle fuer "jetzt" und "pruefen"
+ * ==================================================================
+ *
+ * Entscheidungen 1-4 und E-E1 bis E-E23 (Musterprojekt/
+ * ENTSCHEIDUNGEN_GRUPPE23_BESCHATTUNG.md), Entwurf entwurf_gruppe23_bw.txt.
+ * ================================================================== */
+
+/**
+ * Die Lese-Regel fuer Bestandsdateien (E-E12, E-E13): eine Datei MIT Inhalt
+ * (bw_hat_inhalt(): Kennung oder Merkwort) stammt aus einer frueheren
+ * Fassung. Fehlt ihr endpunkt_ein, gilt 1 - der HTTP-Lesezweig einer
+ * bestehenden Anlage bleibt erreichbar; fehlt ihr mqtt_ein, gilt 0 - die
+ * neue Vorgabe 1 wird nicht still in eine alte Anlage geschrieben. Eine
+ * Neuinstallation ("{}", keine Datei) traegt keinen Inhalt; fuer sie gelten
+ * die Vorgaben. Rueckgabe: Schluessel => Wert, die statt der Vorgabe gelten.
+ * bw_config() schreibt sie beim Vervollstaendigen mit; postupgrade.sh setzt
+ * endpunkt_ein schon beim Update (Datei und Zweitschrift).
+ */
+function bw_uebergang($d)
+{
+    $u = array();
+    if (is_array($d) && bw_hat_inhalt($d)) {
+        if (!array_key_exists('endpunkt_ein', $d)) {
+            $u['endpunkt_ein'] = 1;
+        }
+        if (!array_key_exists('mqtt_ein', $d)) {
+            $u['mqtt_ein'] = 0;
+        }
+    }
+    return $u;
+}
+
+/**
+ * Die Schluessel aus bw_sicherung_spaeter(), fuer die beim Zurueckspielen
+ * einer aelteren Sicherung der GELTENDE Wert gilt, nicht die Vorgabe (N15,
+ * E-E14): mit der Vorgabe schaltete eine 0.9.30-Sicherung den HTTP-Lesezweig
+ * einer Bestandsanlage still ab (G18 N3, G19 N1, G21 N2).
+ */
+function bw_sicherung_geltend()
+{
+    return array('endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist');
+}
+
+/** Warum bw_sperre() zuletzt false gab: 'belegt', 'rechte' - oder 'frei' nach Erfolg (B15/N10). */
+function bw_sperre_lage($setzen = null)
+{
+    static $l = '';
+    if ($setzen !== null) {
+        $l = (string) $setzen;
+    }
+    return $l;
+}
+
+/**
+ * Laesst sich lauf.lock oeffnen? '' ja (oder es gibt sie noch nicht), sonst
+ * 'rechte' - etwa root-eigen nach einem Handlauf als root (B15/N10). Fuer
+ * Befund, Healthcheck und Reiter Test; oeffnet nichts, schreibt nichts.
+ */
+function bw_sperrdatei_lage()
+{
+    $f = bw_paths()['datadir'] . '/lauf.lock';
+    clearstatcache(true, $f);
+    if (file_exists($f) && (!is_file($f) || !is_writable($f))) {
+        return 'rechte';
+    }
+    return '';
+}
+
+/** Die Upgrade-Marke dieser Installation (preupgrade.sh) - '' ohne Wurzel. */
+function bw_marke_pfad()
+{
+    $p = bw_paths();
+    return $p['lbhome'] !== '' ? $p['lbhome'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft' : '';
+}
+
+/**
+ * Gilt die Upgrade-Marke? (B18, Entscheidung: -300 ... 3600 s) Inhalt ist die
+ * Unix-Zeit aus preupgrade.sh, sonst gilt die Aenderungszeit. Gilt bei
+ * -300 <= jetzt - t < 3600; laesst sich keine Zeit lesen, gilt sie
+ * (geschlossen ausfallen wie Bruecke 1.0.1 B3). Eine aeltere Marke stammt aus
+ * einem abgebrochenen Update: Befund und Healthcheck bewerten dann normal,
+ * der Reiter Test nennt sie, preinstall.sh behandelt den naechsten Einbau wie
+ * eine Neuinstallation. Bis 0.9.30 hielt jede liegengebliebene Marke den
+ * Befund fuer immer auf "wird aktualisiert" (Pruefbericht B18). Hinweis N8:
+ * die Bruecke 1.0.1 laesst eine Marke aus der Zukunft NIE gelten - gewollt
+ * verschieden, nicht vereinheitlichen.
+ */
+function bw_marke_gilt($pfad, $jetzt = null)
+{
+    $pfad = (string) $pfad;
+    if ($pfad === '' || !is_file($pfad)) {
+        return false;
+    }
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $t = trim((string) @file_get_contents($pfad, false, null, 0, 32));
+    $t = preg_match('/^[0-9]{1,12}\z/', $t) === 1 ? (int) $t : (int) @filemtime($pfad);
+    if ($t <= 0) {
+        return true;
+    }
+    $a = $jetzt - $t;
+    return $a >= -300 && $a < 3600;
+}
+
+/**
+ * Der Name, den das MQTT-Gateway einem Thema als Virtuellen Eingang gibt
+ * (Hausform G15-G22, Gedaechtnis mqtt-gateway-v2-verhalten): Praefix + "_" +
+ * Thema, "/", "%" und Leerzeichen werden "_". Beispiele:
+ * beschattung_status_zaehler, beschattung_ok, beschattung_alter. EINE Stelle
+ * fuer Namenstabelle, Hakenliste, Bausteinliste und Pruefzeile.
+ */
+function bw_gateway_name($praefix, $thema)
+{
+    return str_replace(array('/', '%', ' '), '_', (string) $praefix . '_' . (string) $thema);
+}
+
+/**
+ * Die Namenstabelle (Gruppe 23, 2.5): je gesendetes Thema der Gateway-Name,
+ * die Bedeutung (Sprachschluessel), der Wertebereich, ob zurueckbehalten, ob
+ * in der V2-Hakenliste und ob "Noncached" (E-E11: status/ok und ziele), und
+ * die Nummer im Musterprojekt (0 = nicht dort). Aus bw_mqtt_themen() - EINE
+ * Quelle fuer Sendeliste, Reiter, Hakenliste und Bausteinliste.
+ */
+function bw_mqtt_namenstabelle(array $c)
+{
+    $w = bw_mqtt_praefix(isset($c['mqtt_thema']) ? $c['mqtt_thema'] : '');
+    $felder = bw_felder();
+    $mp = array('status/zaehler' => 1, 'fehler' => 2, 'automatiken' => 3, 'scharf' => 4, 'status/ok' => 13,
+                'aktiv' => 14, 'fenster' => 15, 'ziele' => 16, 'gesendet' => 18, 'code' => 19, 'alter' => 20);
+    $noncached = array('status/ok', 'ziele');
+    $ohne_haken = array('status/ts', 'zaehler');
+    $aus = array();
+    foreach (bw_mqtt_themen($c) as $voll => $bez) {
+        $t = (strpos($voll, $w . '/') === 0) ? substr($voll, strlen($w) + 1) : $voll;
+        $feld = strtoupper($t);
+        if (isset($felder[$feld])) {
+            $bereich = $felder[$feld]['min'] . ' … ' . $felder[$feld]['max'];
+        } elseif ($t === 'status/zaehler') {
+            $bereich = '0 … 999';
+        } elseif ($t === 'status/ok') {
+            $bereich = '0 … 1';
+        } else {
+            $bereich = 'Unix-Sekunden';
+        }
+        $aus[] = array('thema' => $t, 'voll' => $voll, 'name' => bw_gateway_name($w, $t), 'bez' => $bez,
+                       'bereich' => $bereich, 'retain' => bw_mqtt_retain($t),
+                       'haken' => !in_array($t, $ohne_haken, true),
+                       'noncached' => in_array($t, $noncached, true),
+                       'nr' => isset($mp[$t]) ? $mp[$t] : 0);
+    }
+    return $aus;
+}
+
+/**
+ * Der Merker der Strukturdatei je Prozess (b1; Gruppe 23 N4 herausgezogen aus
+ * bw_struktur_holen()): Schluessel = Adresse|Benutzer. Ohne Wert lesen, mit
+ * Wert merken, $loeschen verwirft einen bzw. (ohne Schluessel) alle.
+ */
+function bw_struktur_merk($schluessel = null, $wert = null, $loeschen = false)
+{
+    static $m = array();
+    if ($schluessel === null) {
+        if ($loeschen) {
+            $m = array();
+        }
+        return null;
+    }
+    if ($loeschen) {
+        unset($m[$schluessel]);
+        return null;
+    }
+    if ($wert !== null) {
+        $m[$schluessel] = $wert;
+        return $wert;
+    }
+    return isset($m[$schluessel]) ? $m[$schluessel] : null;
+}
+
+/** Alle gemerkten Strukturdateien verwerfen - die Befehlsbruecke vor jedem Befehl (N4). */
+function bw_struktur_vergessen()
+{
+    bw_struktur_merk(null, null, true);
+}
+
+/**
+ * B23 (Entscheidung 2, E-E8): ist im Ruhezweig des Takts eine Zaehlung
+ * faellig? Haken "Die Wirkung messen" UND eingeschaltet UND im Zeitfenster
+ * UND die letzte Zaehlung (scharf_ts) mindestens 900 s alt oder aus der
+ * Zukunft. Der Sendezweig zaehlt wie bisher; beide teilen scharf_ts, also
+ * hoechstens eine Zaehlung je 15 Minuten (im Werksfenster 60 je Tag).
+ */
+function bw_zaehlen_faellig(array $c, array $stand, $jetzt, $im_fenster)
+{
+    if (empty($c['pruefen_ein']) || empty($c['aktiv']) || !$im_fenster) {
+        return false;
+    }
+    $ts = isset($stand['scharf_ts']) ? (int) $stand['scharf_ts'] : 0;
+    return $ts > (int) $jetzt || (int) $jetzt - $ts >= 900;
+}
+
+/** Gesamtfrist einer Aktion ueber die Befehlsbruecke (E-E2, N12): unter BB_WACHE_GRENZE (180 s). */
+function bw_aktion_frist()
+{
+    return 90;
+}
+
+/** Den Code im LL-Rumpf des Miniservers lesen (N3): Code="200" bzw. "Code":"200" - 0, wenn keiner dasteht. */
+function bw_ll_code($rumpf)
+{
+    $r = is_string($rumpf) ? $rumpf : '';
+    if (preg_match('/\bCode\s*=\s*"([0-9]{3})"/', $r, $m) === 1
+            || preg_match('/"Code"\s*:\s*"?([0-9]{3})/', $r, $m) === 1) {
+        return (int) $m[1];
+    }
+    return 0;
+}
+
+/**
+ * "A jetzt druecken" - EINE Stelle fuer den Endpunkt (aktion=jetzt), den
+ * Knopf "Befehl jetzt senden" im Reiter Test und die Befehlsbruecke (E-E2).
+ * Ablauf wie bisher am Endpunkt: eingeschaltet? (zweiter Haken der Bruecke,
+ * E-E1) - Ziele? - Sperre lauf.lock - Positionen vor dem Befehl - je Ziel
+ * senden - Stand UNTER der Sperre frisch lesen, Rechnung
+ * bw_stand_nach_senden(), Wirkung eroeffnen, schreiben - Lebenszeichen ohne
+ * Takt - MQTT. Zeitfenster, Abstand, Wetter, Sonne und Anwesenheit gelten
+ * hier bewusst NICHT: wer den Befehl schickt, meint ihn. Gesamtfrist
+ * bw_aktion_frist(): nach 90 s geht kein weiteres Ziel hinaus. Die Quelle
+ * 'mqtt' (Dauerdienst der Bruecke) verwirft vorher die gemerkte
+ * Strukturdatei (N4).
+ * Rueckgabe: ok, grund (ASCII), fehler (Kennwort fuer ERR=), code (HTTP-Code
+ * des Endpunkts), stand, ergebnisse (je Ziel mit nr/befehl/uuid), gut, n.
+ */
+function bw_aktion_jetzt(array $c, $quelle = 'http')
+{
+    $aus = array('ok' => false, 'grund' => '', 'fehler' => '', 'code' => 409, 'stand' => null,
+                 'ergebnisse' => array(), 'gut' => 0, 'n' => 0);
+    /* Der Knopf im Reiter Test sendet wie bis 0.9.30 auch bei ausgeschaltetem Waechter ("Zum Ausprobieren ohne
+       Deinstallieren", TEXT.H_AKTIV); Endpunkt und Bruecke lehnen dann ab (zweiter Haken, E-E1). */
+    if (empty($c['aktiv']) && $quelle !== 'knopf') {
+        $aus['grund'] = 'abgeschaltet';
+        $aus['fehler'] = 'ABGESCHALTET';
+        return $aus;
+    }
+    $ziele = bw_ziele($c);
+    $aus['n'] = count($ziele);
+    if (!$ziele) {
+        $aus['grund'] = 'kein Ziel eingerichtet';
+        $aus['fehler'] = 'KEIN_ZIEL';
+        return $aus;
+    }
+    $lock = bw_sperre();
+    if ($lock === false) {
+        $aus['grund'] = bw_sperre_lage() === 'rechte' ? 'lauf.lock laesst sich nicht oeffnen' : 'besetzt';
+        $aus['fehler'] = 'BESETZT';
+        return $aus;
+    }
+    if ($quelle === 'mqtt') {
+        bw_struktur_vergessen();
+    }
+    $start = microtime(true);
+    $vorher = bw_wirkung_vorher($c);
+    $frist = false;
+    foreach ($ziele as $z) {
+        if (microtime(true) - $start > bw_aktion_frist()) {
+            $frist = true;
+            break;
+        }
+        $r = bw_senden($c, $z['uuid'], $z['befehl']);
+        $r['nr'] = $z['nr'];
+        $r['befehl'] = $z['befehl'];
+        $r['uuid'] = $z['uuid'];
+        $aus['ergebnisse'][] = $r;
+        if (!empty($r['ok'])) {
+            $aus['gut']++;
+        }
+    }
+    if (!$aus['ergebnisse']) {
+        fclose($lock);
+        $aus['code'] = 502;
+        $aus['fehler'] = 'FRIST';
+        $aus['grund'] = sprintf('Frist (0 von %d Zielen)', count($ziele));
+        return $aus;
+    }
+    $st = bw_stand_nach_senden(bw_stand_lesen(), $aus['ergebnisse']);
+    $st = bw_wirkung_beginnen($st, $vorher, $aus['ergebnisse']);
+    bw_stand_schreiben($st);
+    bw_lauf_schreiben($aus['gut'] === count($ziele) && !bw_zaehlung_misslungen($c, $st), false);
+    fclose($lock);
+    bw_mqtt_publish($c, $st);
+    $aus['stand'] = $st;
+    $aus['ok'] = ($aus['gut'] === count($ziele));
+    $aus['code'] = $aus['ok'] ? 200 : 502;
+    if ($frist) {
+        $aus['grund'] = sprintf('Frist (%d von %d Zielen)', count($aus['ergebnisse']), count($ziele));
+    } elseif (!$aus['ok']) {
+        $aus['grund'] = sprintf('nicht angenommen (%d von %d Zielen, HTTP %d)', $aus['gut'], count($ziele),
+                                (int) $st['code']);
+    }
+    if ($quelle === 'knopf') {
+        bw_log('von Hand ausgeloest: ' . $aus['gut'] . ' von ' . count($ziele) . ' Ziel(en) angenommen');
+    } elseif ($quelle === 'mqtt') {
+        bw_log('Befehlsbruecke: A jetzt gedrueckt - ' . $aus['gut'] . ' von ' . count($ziele)
+            . ' Zielen angenommen, HTTP ' . (int) $st['code'] . ($frist ? ' (Frist ' . bw_aktion_frist() . ' s)' : ''));
+    }
+    return $aus;
+}
+
+/**
+ * "Automatiken zaehlen" - EINE Stelle fuer den Endpunkt (aktion=pruefen), den
+ * Knopf im Reiter Test und die Befehlsbruecke (E-E2). Haken "Die Wirkung
+ * messen" noetig (sonst PRUEFEN_AUS). Endpunkt und Bruecke messen hoechstens
+ * alle 900 s neu und geben sonst die letzte Messung zurueck; der Knopf zaehlt
+ * sofort und mit allen drei Zustaenden (Grund lesbar). Die Bruecke liest nur
+ * autoActive mit Gesamtfrist (N12) und frischer Strukturdatei (N4).
+ * Rueckgabe: ok, neu (gemessen?), grund (ASCII), fehler, code, stand, erg,
+ * meldung (Klartext der Oberflaeche bei einem Fehlschlag).
+ */
+function bw_aktion_pruefen(array $c, $quelle = 'http')
+{
+    $aus = array('ok' => false, 'neu' => false, 'grund' => '', 'fehler' => '', 'code' => 409, 'stand' => null,
+                 'erg' => null, 'meldung' => '');
+    if (empty($c['pruefen_ein'])) {
+        $aus['grund'] = 'Zaehlen aus';
+        $aus['fehler'] = 'PRUEFEN_AUS';
+        return $aus;
+    }
+    $st = bw_stand_lesen();
+    if ($quelle !== 'knopf') {
+        $ts = isset($st['scharf_ts']) ? (int) $st['scharf_ts'] : 0;
+        $alter = time() - $ts;
+        if ($ts > 0 && $alter >= 0 && $alter < 900) {
+            $aus['ok'] = true;
+            $aus['code'] = 200;
+            $aus['stand'] = $st;
+            $aus['grund'] = 'letzte Messung ' . $alter . ' s alt, nicht neu gemessen';
+            return $aus;
+        }
+    }
+    $lock = bw_sperre();
+    if ($lock === false) {
+        $aus['grund'] = bw_sperre_lage() === 'rechte' ? 'lauf.lock laesst sich nicht oeffnen' : 'besetzt';
+        $aus['fehler'] = 'BESETZT';
+        return $aus;
+    }
+    if ($quelle === 'mqtt') {
+        bw_struktur_vergessen();
+    }
+    $mqtt = ($quelle === 'mqtt');
+    list($ok, $meldung, $erg) = bw_automatiken($c, 40, $mqtt, $mqtt ? bw_aktion_frist() : 0);
+    $st = bw_zaehlung_eintragen(bw_stand_lesen(), $ok, $erg);
+    bw_stand_schreiben($st);
+    fclose($lock);
+    bw_mqtt_publish($c, $st);
+    $aus['neu'] = true;
+    $aus['stand'] = $st;
+    $aus['erg'] = $erg;
+    if ($ok) {
+        $aus['ok'] = true;
+        $aus['code'] = 200;
+        if ($mqtt) {
+            bw_log('Befehlsbruecke: Automatiken gezaehlt - ' . (int) $erg['scharf'] . ' von ' . (int) $erg['gesamt']
+                . ' scharf');
+        }
+        return $aus;
+    }
+    $aus['code'] = 502;
+    $aus['fehler'] = 'PRUEFEN_MISSLUNGEN';
+    $aus['meldung'] = (string) $meldung;
+    $aus['grund'] = 'misslungen: ' . html_entity_decode(strip_tags((string) $meldung), ENT_QUOTES, 'UTF-8');
+    if ($mqtt) {
+        bw_log('Befehlsbruecke: die Automatiken liessen sich nicht zaehlen: ' . $aus['grund']);
+    }
+    return $aus;
+}
+
+/**
+ * Den Inhalt von beschattung.log und cron.err auf 0 Byte setzen (B6b,
+ * Knopf "Protokoll leeren"). Nie loeschen: die Dateien gehoeren zum
+ * Protokollordner, den LoxBerry anlegt. Rueckgabe: Dateiname => true|false
+ * (nur vorhandene Dateien).
+ */
+function bw_protokoll_leeren()
+{
+    $p = bw_paths();
+    $aus = array();
+    foreach (array($p['logdatei'], $p['log'] . '/cron.err') as $f) {
+        if (!is_file($f)) {
+            continue;
+        }
+        $fh = @fopen($f, 'c');
+        $ok = ($fh !== false) && @ftruncate($fh, 0);
+        if ($fh !== false) {
+            fclose($fh);
+        }
+        $aus[basename($f)] = (bool) $ok;
+    }
+    return $aus;
+}
+
+/* ==================================================================
+ * L. ANWESENHEIT - ABNEHMER haus/anwesenheit/jemand (Gruppe 23, V3, Nr. 15)
+ * ==================================================================
+ *
+ * AB WERK AUS (anwesend_ein). Meldet der BLE-Scanner NG live "niemand da"
+ * (haus/anwesenheit/jemand = 0) und bleibt es die Frist lang dabei
+ * (anwesend_frist, Vorgabe 10 min), drueckt der naechste Takt EINMAL je
+ * Abwesenheit das A an alle faelligen Ziele, auch wenn der Abstand noch nicht
+ * um ist - nur eingeschaltet, im Zeitfenster, mit Ziel und unter den Wind- und
+ * Sonnenregeln (halten sie zurueck, bleibt der Druck offen). Wer weg ist,
+ * greift nicht von Hand ein; die Sonne trifft das leere Haus. Danach gilt
+ * wieder der Abstand.
+ *
+ * GELESEN WIRD UEBER DEN HAUS-HOERER (bw_sonne_hoeren(), E-E5): er laeuft
+ * fast ununterbrochen und legt data/anwesenheit.json ab. Lebenszeichen ist
+ * haus/anwesenheit/zaehler (alle 30 s, nie retained): aendert er sich laenger
+ * als 120 s nicht (live gesehen), kommt "-", fehlt der Hoerer oder ist der
+ * Broker weg, gilt das bisherige Verhalten - der Reiter Test sagt es. Die
+ * Linie schreibt nichts unter haus/.
+ * ================================================================== */
+
+function bw_anwesend_stamm()
+{
+    return 'haus/anwesenheit';
+}
+
+function bw_anwesend_pfad()
+{
+    return bw_paths()['datadir'] . '/anwesenheit.json';
+}
+
+/** Der Stand des Haus-Hoerers (data/anwesenheit.json) - frisch gelesen, kein static. */
+function bw_anwesend_lesen()
+{
+    $d = json_decode((string) @file_get_contents(bw_anwesend_pfad()), true);
+    return is_array($d) ? $d : array();
+}
+
+/**
+ * Eine Nachricht merken (rein, ohne Datei): der Zaehler zaehlt nur LIVE und
+ * nur mit geaendertem Wert (Bauart abfahrt_haus_frisch); jemand: der Beginn
+ * der Abwesenheit ist die erste Beobachtung "0" nach etwas anderem - ein
+ * zurueckbehaltenes "0" nach einem Neustart des Hoerers verschiebt ihn nicht.
+ */
+function bw_anwesend_merken(array $d, $thema, $wert, $retained, $jetzt)
+{
+    $d += array('jemand' => null, 'zaehler' => null, 'zaehler_seit' => 0, 'null_seit' => 0);
+    $w = trim((string) $wert);
+    if ($thema === bw_anwesend_stamm() . '/zaehler') {
+        if ($retained || preg_match('/^[0-9]{1,3}\z/', $w) !== 1) {
+            return $d;
+        }
+        if ($d['zaehler'] !== $w) {
+            $d['zaehler'] = $w;
+            $d['zaehler_seit'] = (int) $jetzt;
+        }
+        return $d;
+    }
+    if ($thema === bw_anwesend_stamm() . '/jemand') {
+        $w = in_array($w, array('0', '1'), true) ? $w : '-';
+        if ($w === '0') {
+            if ($d['jemand'] !== '0' || (int) $d['null_seit'] <= 0) {
+                $d['null_seit'] = (int) $jetzt;
+            }
+        } else {
+            $d['null_seit'] = 0;
+        }
+        $d['jemand'] = $w;
+    }
+    return $d;
+}
+
+/** Eine Nachricht im Haus-Hoerer ablegen - nur, solange seine Kennung gilt (wie bw_sonne_merken()). */
+function bw_anwesend_ablegen($id, $thema, $wert, $retained, $jetzt)
+{
+    if (!bw_sonne_hoerer_gilt($id)) {
+        return false;
+    }
+    $d = bw_anwesend_merken(bw_anwesend_lesen(), (string) $thema, $wert, (bool) $retained, $jetzt);
+    $d['ts'] = (int) $jetzt;
+    return bw_json_schreiben(bw_anwesend_pfad(), $d, 0644);
+}
+
+/**
+ * Die Lage - EINE Rechnung fuer Takt und Reiter Test. Rueckgabe
+ * array(lage, beginn, zaehleralter): lage schweigt (Zaehler aelter als 120 s,
+ * nie gesehen oder aus der Zukunft), jemand, ohne_aussage ("-"), wartet
+ * (niemand, Frist laeuft) oder niemand (Frist um); beginn = Beginn der
+ * Abwesenheit (Unix-Zeit), sonst 0.
+ */
+function bw_anwesend_lage(array $d, $jetzt, $frist_s)
+{
+    $d += array('jemand' => null, 'zaehler_seit' => 0, 'null_seit' => 0);
+    $a = (int) $jetzt - (int) $d['zaehler_seit'];
+    /* Alter 0 ist frisch, nicht "aus der Zukunft": die Phasenprobe (Gruppe 23, phase_vorher_t1.txt) fand mit einem Zaehler
+       in derselben Sekunde wie der Takt in 3 von 3 Takten "schweigt" - mit festem Sendetakt waere das ein dauerhafter
+       Rueckfall gewesen. Aus der Zukunft ist erst ein negatives Alter (Uhr zurueck, A12). */
+    if ((int) $d['zaehler_seit'] <= 0 || $a < 0 || $a > 120) {
+        return array('schweigt', 0, (int) $d['zaehler_seit'] > 0 ? $a : -1);
+    }
+    if ($d['jemand'] === '1') {
+        return array('jemand', 0, $a);
+    }
+    if ($d['jemand'] !== '0' || (int) $d['null_seit'] <= 0) {
+        return array('ohne_aussage', 0, $a);
+    }
+    if ((int) $jetzt - (int) $d['null_seit'] < (int) $frist_s) {
+        return array('wartet', (int) $d['null_seit'], $a);
+    }
+    return array('niemand', (int) $d['null_seit'], $a);
+}
+
+/** Ist der eine Druck dieser Abwesenheit noch offen? */
+function bw_anwesend_faellig(array $lage, array $stand)
+{
+    return $lage[0] === 'niemand' && (!isset($stand['anwesend_a']) || (int) $stand['anwesend_a'] !== (int) $lage[1]);
+}
+
+/** Die Zeile im Reiter Test (Klartext, uebersetzt): array(titel, 0|1|2, text). Dieselbe Rechnung wie der Takt. */
+function bw_anwesend_pruefzeile(array $c, array $stand, $jetzt = null)
+{
+    $titel = bw_t('TEXT.S_ANWESEND');
+    if (empty($c['anwesend_ein'])) {
+        return array($titel, 2, bw_t('TEXT.S_ANWESEND_AUS'));
+    }
+    $jetzt = ($jetzt === null) ? time() : (int) $jetzt;
+    $frist = (int) $c['anwesend_frist'] * 60;
+    $l = bw_anwesend_lage(bw_anwesend_lesen(), $jetzt, $frist);
+    if ($l[0] === 'schweigt') {
+        return array($titel, 0, sprintf(bw_t('TEXT.S_ANWESEND_SCHWEIGT'),
+            $l[2] >= 0 ? sprintf(bw_t('TEXT.S_ANWESEND_ZAEHLER_ALT'), (int) $l[2]) : bw_t('TEXT.S_ANWESEND_ZAEHLER_NIE')));
+    }
+    if ($l[0] === 'ohne_aussage') {
+        return array($titel, 2, bw_t('TEXT.S_ANWESEND_OHNE'));
+    }
+    if ($l[0] === 'jemand') {
+        return array($titel, 1, sprintf(bw_t('TEXT.S_ANWESEND_JEMAND'), (int) $l[2]));
+    }
+    $min = (int) floor(($jetzt - $l[1]) / 60);
+    if ($l[0] === 'wartet') {
+        return array($titel, 1, sprintf(bw_t('TEXT.S_ANWESEND_WARTET'), $min,
+            max(0, (int) ceil(($l[1] + $frist - $jetzt) / 60))));
+    }
+    if (!bw_anwesend_faellig($l, $stand) && !empty($stand['anwesend_a_ts'])) {
+        return array($titel, 1, sprintf(bw_t('TEXT.S_ANWESEND_GESENDET'), $min,
+            bw_zeitpunkt((int) $stand['anwesend_a_ts'])));
+    }
+    return array($titel, 1, sprintf(bw_t('TEXT.S_ANWESEND_FAELLIG'), $min));
+}
+
+/* ==================================================================
+ * M. BEFEHLSBRUECKE 1.0.1 (Gruppe 23, V1, E-E1 bis E-E3)
+ * ==================================================================
+ *
+ * Die Bruecke selbst (bin/befehlsbruecke.php, .sh) ist die gemeinsame
+ * Stammfassung, byte-gleich; linieneigen ist nur bin/befehle_zuordnung.php
+ * (Tasten jetzt und pruefen, zweiter Haken = Hauptschalter aktiv). Der
+ * Waechter laeuft im Fuenfminutentakt (bw_lauf.php, vor jeder Sperre und vor
+ * dem Start des Haus-Hoerers); der Dienst selbst ist ereignisgetrieben.
+ * ================================================================== */
+
+/**
+ * Die Befehlsbruecke als Bibliothek laden (BB_NUR_LADEN; Bauart
+ * fer_bruecke_laden(), Ferien 1.2.28). Installiert liegt sie unter
+ * bin/plugins/<ordner>/, in einem Archiv unter bin/ neben webfrontend/.
+ * Rueckgabe true, wenn bb_waechter() danach da ist.
+ */
+function bw_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) {
+        return true;
+    }
+    $p = bw_paths();
+    $kand = array();
+    if ($p['lbhome'] !== '') {
+        $kand[] = $p['lbhome'] . '/bin/plugins/' . $p['plugin'] . '/befehlsbruecke.php';
+    }
+    $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    foreach ($kand as $k) {
+        if (is_file($k)) {
+            if (!defined('BB_NUR_LADEN')) {
+                define('BB_NUR_LADEN', true);
+            }
+            require_once $k;
+            return function_exists('bb_waechter');
+        }
+    }
+    return false;
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter, Vorlage und Musterprojekt). array(Liste|null, Fehlertext). */
+function bw_bruecke_liste()
+{
+    if (!bw_bruecke_laden()) {
+        return array(null, bw_t('BEFEHL.T_NICHT_DA'));
+    }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) {
+        return array(null, $fehler);
+    }
+    $GLOBALS['bb_zuordnung'] = $z;
+    list($fehl) = bb_zuordnung_pruefen($z);
+    if ($fehl) {
+        return array(null, $fehl[0]);
+    }
+    return array(bb_liste($z, bb_einstellungen($z)), '');
+}
+
+/**
+ * Die Bruecke sofort schalten - nach dem Speichern im Reiter MQTT und nach
+ * dem Zurueckspielen einer Sicherung (Bauart fer_bruecke_schalten()). Soll sie
+ * laufen (befehle_mqtt_ein UND mqtt_ein): befehlsbruecke.sh start; sonst, wenn
+ * sie laeuft: stop. Der Waechter im Takt startet nach einem Start hoechstens
+ * alle 600 s neu - wer den Haken aus- und einschaltet, haette sonst bis zu 10
+ * Minuten keine Bruecke. Rueckgabe array(rc oder null = nichts zu tun,
+ * 'start'|'stop'|'', Ausgabe).
+ */
+function bw_bruecke_schalten(array $c)
+{
+    if (!bw_bruecke_laden()) {
+        return array(1, '', bw_t('BEFEHL.T_NICHT_DA'));
+    }
+    $p = bb_pfade();
+    if (!$p) {
+        return array(1, '', 'keine LoxBerry-Installation erkannt');
+    }
+    if (!empty($c['befehle_mqtt_ein']) && !empty($c['mqtt_ein'])) {
+        list($rc, $aus) = bb_sh($p, 'start');
+        return array($rc, 'start', $aus);
+    }
+    if (!bb_dienste()) {
+        return array(null, '', '');
+    }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    return array($rc, 'stop', $aus);
+}
+
+/** Meldungen fuer die Oberflaeche nach bw_bruecke_schalten(): array(ok-Meldungen, Fehlermeldungen), maskiert. */
+function bw_bruecke_meldungen(array $r)
+{
+    list($rc, $art, $aus) = $r;
+    if ($art === 'start') {
+        return $rc === 0 ? array(array(bw_t('BEFEHL.M_EIN') . ' ' . bw_e($aus)), array())
+                         : array(array(), array(sprintf(bw_t('BEFEHL.M_START_FEHL'), bw_e($aus))));
+    }
+    if ($art === 'stop') {
+        return $rc === 0 ? array(array(bw_t('BEFEHL.M_AUS')), array())
+                         : array(array(), array(sprintf(bw_t('BEFEHL.M_STOP_FEHL'), bw_e($aus))));
+    }
+    if ($rc !== null && $rc !== 0) {
+        return array(array(), array(sprintf(bw_t('BEFEHL.M_START_FEHL'), bw_e($aus))));
+    }
+    return array(array(), array());
+}
+
+/**
+ * Lage der Befehlsbruecke fuer den Reiter Test (Bauart fer_bruecke_lage()):
+ * Dienst laeuft (argumentweise), zustand.json juenger als 180 s, Abo steht.
+ * Rueckgabe array(true|false|null, Text) - null heisst "aus" (Haken) und
+ * zaehlt nicht als bestanden.
+ */
+function bw_bruecke_lage()
+{
+    if (!bw_bruecke_laden()) {
+        return array(false, bw_t('BEFEHL.T_NICHT_DA'));
+    }
+    if (!bb_pfade()) {
+        return array(null, bw_t('BEFEHL.T_KEINE_WURZEL'));
+    }
+    list($soll, $grund) = bb_soll_ermitteln();
+    if ($soll === 1) {
+        return array(null, bw_t('BEFEHL.T_AUS'));
+    }
+    if ($soll !== 0) {
+        return array(false, sprintf(bw_t('BEFEHL.T_DEFEKT'), $grund));
+    }
+    $zu = bb_zustand_lesen();
+    $pids = bb_dienste();
+    $alter = (is_array($zu) && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if ($pids && $alter !== null && $alter <= BB_WACHE_GRENZE && !empty($zu['abo'])) {
+        $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+        $txt = sprintf(bw_t('BEFEHL.T_LAEUFT'), implode(' ', $pids),
+            is_string($zu['abo']) ? $zu['abo'] : '',
+            isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0);
+        $lz = (isset($zu['letzter']) && is_array($zu['letzter'])) ? $zu['letzter'] : null;
+        if ($lz !== null && isset($lz['name'])) {
+            $txt .= ' ' . sprintf(bw_t('BEFEHL.T_LETZTER'), (string) $lz['name'],
+                isset($lz['ergebnis']) ? (string) $lz['ergebnis'] : '-',
+                isset($lz['zeit']) ? max(0, time() - (int) $lz['zeit']) : 0);
+        } else {
+            $txt .= ' ' . bw_t('BEFEHL.T_KEINER');
+        }
+        return array(true, $txt);
+    }
+    $wie = !$pids ? 'kein Dienst' : ($alter === null ? 'kein Zustand' : ($alter > BB_WACHE_GRENZE
+        ? 'Zustand ' . $alter . ' s alt' : 'ohne Abo' . (is_array($zu) && !empty($zu['fehler']) ? ': ' . $zu['fehler'] : '')));
+    return array(false, sprintf(bw_t('BEFEHL.T_STEHT'), $wie));
+}
+
+/**
+ * Die Vorlage der MQTT-Befehle (bb_vorlage(): eigener Ausgang
+ * "Beschattungswaechter MQTT-Befehle" an /dev/udp/<LoxBerry>/<Udpinport>,
+ * Pulse mit fester 1). Im Musterprojekt stehen dieselben zwei Befehle am
+ * gemeinsamen Ausgang "LoxBerry MQTT-Gateway". Rueckgabe array(name, inhalt)
+ * oder null.
+ */
+function bw_vorlage_befehle()
+{
+    list($l) = bw_bruecke_liste();
+    if ($l === null) {
+        return null;
+    }
+    $bp = bb_pfade();
+    $port = $bp ? bb_broker($bp)['udpin'] : 11884;
+    return array('VQ_Beschattungswaechter_MQTT.xml', bb_vorlage($l, bw_wirtsname(), $port));
+}
+
+/* ==================================================================
+ * N. JALOUSIE-BAUSTEINE VORSCHLAGEN (Gruppe 23, V4, E-E6)
+ * ==================================================================
+ *
+ * Das A nimmt laut Structure File V17.0 der Zentralbaustein an
+ * (CentralJalousie, Befehl auto - wirkt auf alle untergeordneten) und jede
+ * Jalousie mit Automatik (details.isAutomatic bzw. Zustand autoActive, Befehl
+ * auto). Eine Jalousie ohne Automatik nimmt es nicht an und wird nur gezaehlt.
+ * Der Knopf liest nur die Strukturdatei und speichert nichts; die Auswahl
+ * fuellt nur das Formular. "autoshade/1" (Vorgabe der Ziele 2-6) steht in
+ * keinem Loxone-Dokument und bleibt Werksvorgabe, bis es an einem Rollladen
+ * gemessen ist (N3, E-E7).
+ * ================================================================== */
+
+/** Rueckgabe array(ok, Meldung, Liste, Zahl ohne Automatik). Liste: art, name, raum, uuid, befehl, umfasst. */
+function bw_jalousien_vorschlag(array $c)
+{
+    list($ok, $meldung, $d) = bw_struktur_holen($c);
+    if (!$ok) {
+        return array(0, $meldung, array(), 0);
+    }
+    $raeume = array();
+    foreach ((array) (isset($d['rooms']) ? $d['rooms'] : array()) as $u => $r) {
+        $raeume[$u] = (is_array($r) && isset($r['name']) && is_scalar($r['name'])) ? (string) $r['name'] : '';
+    }
+    $ja = array();
+    $nein = 0;
+    foreach ((array) $d['controls'] as $uuid => $b) {
+        if (!is_array($b) || !isset($b['type']) || !is_string($b['type'])) {
+            continue;
+        }
+        if (bw_kennung_sauber((string) $uuid) === '') {
+            continue;
+        }
+        $raum = (isset($b['room']) && is_scalar($b['room']) && isset($raeume[(string) $b['room']]))
+            ? $raeume[(string) $b['room']] : '';
+        $name = (isset($b['name']) && is_scalar($b['name'])) ? (string) $b['name'] : (string) $uuid;
+        if ($b['type'] === 'CentralJalousie') {
+            $n = (isset($b['details']['controls']) && is_array($b['details']['controls']))
+                ? count($b['details']['controls']) : 0;
+            $ja[] = array('art' => 'zentral', 'name' => $name, 'raum' => $raum, 'uuid' => (string) $uuid,
+                          'befehl' => 'auto', 'umfasst' => $n);
+        } elseif ($b['type'] === 'Jalousie') {
+            $auto = !empty($b['details']['isAutomatic'])
+                || (isset($b['states']) && is_array($b['states']) && isset($b['states']['autoActive']));
+            if (!$auto) {
+                $nein++;
+                continue;
+            }
+            $ja[] = array('art' => 'einzeln', 'name' => $name, 'raum' => $raum, 'uuid' => (string) $uuid,
+                          'befehl' => 'auto', 'umfasst' => 1);
+        }
+    }
+    usort($ja, function ($a, $b) {
+        if ($a['art'] !== $b['art']) {
+            return $a['art'] === 'zentral' ? -1 : 1;
+        }
+        return strcmp($a['raum'] . '|' . $a['name'], $b['raum'] . '|' . $b['name']);
+    });
+    return array(1, '', array_slice($ja, 0, 300), $nein);
+}
+
+/** Den Vorschlag aus der Einmalmeldung pruefen - was nicht passt, faellt weg (Kennung nur, wenn bw_kennung_sauber() sie annimmt). */
+function bw_vorschlag_pruefen($roh)
+{
+    if (!is_array($roh) || !isset($roh['liste']) || !is_array($roh['liste'])) {
+        return null;
+    }
+    $liste = array();
+    foreach ($roh['liste'] as $z) {
+        if (!is_array($z) || !isset($z['uuid'], $z['art']) || !is_string($z['uuid'])
+                || bw_kennung_sauber($z['uuid']) === '' || !in_array($z['art'], array('zentral', 'einzeln'), true)) {
+            continue;
+        }
+        $liste[] = array('art' => $z['art'], 'uuid' => $z['uuid'],
+                         'name' => (isset($z['name']) && is_string($z['name'])) ? bw_gekuerzt($z['name'], 80) : '',
+                         'raum' => (isset($z['raum']) && is_string($z['raum'])) ? bw_gekuerzt($z['raum'], 80) : '',
+                         'umfasst' => isset($z['umfasst']) ? (int) $z['umfasst'] : 0);
+        if (count($liste) >= 300) {
+            break;
+        }
+    }
+    return array('liste' => $liste, 'ohne' => isset($roh['ohne']) ? (int) $roh['ohne'] : 0);
 }

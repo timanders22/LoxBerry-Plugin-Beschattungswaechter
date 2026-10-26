@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.30
+Version 0.9.31
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -10,15 +10,42 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
   Passwort im Plugin, keines in der Loxone-Projektdatei.
 * Nur im eingestellten Zeitfenster und höchstens einmal je Abstand.
 * Bis zu **sechs Ziele** — ein Zentralbaustein oder einzelne Rollläden.
-* **Rückweg nach Loxone:** ein Endpunkt im unangemeldeten Bereich, den der
-  Miniserver ohne Zugangsdaten abfragen kann, geschützt durch ein Merkwort.
-* Wahlweise zusätzlich über **MQTT**, mit Lebenszeichen bei jedem Durchgang.
+* **Rückweg nach Loxone über MQTT** (seit 0.9.31 der Hauptweg, bei einer
+  Neuinstallation ab Werk an): alle Werte in jedem Fünfminutentakt, mit
+  Lebenszeichen. Der Endpunkt mit Merkwort bleibt für bestehende Anlagen.
+* **Befehle aus Loxone** über die gemeinsame Befehlsbrücke (ab Werk aus).
 * Misst auf Wunsch die **Wirkung** (`autoActive` und die Position danach) statt
   nur des Rückgabewerts.
 * Meldet sich beim **Healthcheck** von LoxBerry.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.31
+
+* **MQTT ist der Hauptweg** (Entscheidung 3): jeder Takt schickt alle Themen, nicht nur nach einem Befehl; neues
+  flüchtiges Thema `alter` (Sekunden seit dem letzten Befehl); `scharf`/`automatiken` tragen ohne Zählung **-1**
+  statt eines Strichs (das löst die Entscheidung vom 29.09.2026 ab); Namenstabelle mit den Gateway-Namen
+  (`beschattung_status_zaehler` …) im Reiter „Einbindung in Loxone“, Hakenliste für Gateway V2 mit „Noncached“ für
+  `status/ok` und `ziele`. Bei einer Neuinstallation ist MQTT ab Werk an; eine bestehende Anlage behält ihre
+  Einstellung (Hinweis beim Update).
+* **HTTP-Lesezweig hinter einem Haken** (`endpunkt_ein`): bei einer Neuinstallation aus, nach einem Update an;
+  `jetzt`, `pruefen` und der Selbsttest bleiben hinter dem Merkwort.
+* **Befehlsbrücke 1.0.1**: Tasten `beschattung/befehl/jetzt` (das A – wirkt nur bei eingeschaltetem Wächter) und
+  `…/pruefen` (Automatiken zählen); Haken „Befehle über MQTT annehmen“ ab Werk aus; neue Abhängigkeit
+  `mosquitto-clients`.
+* **Zählen im Zeitfenster alle 15 Minuten**, auch ohne Befehl (nur `autoActive`, höchstens 40 Jalousien).
+* **Anwesenheit** (ab Werk aus): meldet der BLE-Scanner NG, dass niemand zu Hause ist, drückt der Takt nach einer
+  Frist einmal je Abwesenheit das A, ohne den Abstand abzuwarten.
+* **Jalousie-Bausteine vorschlagen**: Knopf im Reiter Einstellungen (liest die Projektdatei, speichert nichts).
+* Korrekturen: Reiter Test misst nur, wenn er ausdrücklich geöffnet ist; halbe Zielzeilen in beiden Richtungen;
+  Wortzeichen der Ecowitt-Weiche als Passwortfeld; Knopf „Protokoll leeren“; eigene Wikiseite; Cron als root gibt an
+  loxberry ab, ein root-eigenes `lauf.lock` wird gemeldet; liegengebliebene Aktualisierungsmarke gilt nur 3600 s;
+  der Stand wird nach der Sperre frisch gelesen.
+* Musterprojekt: Seite „Beschattungswächter“ mit 35 Zeilen – Virtuelle Eingänge des Gateways, Ausfallerkennung am
+  Lebenszeichen (Analogwertvalidierung, 1500 s), Befehle am Ausgang „LoxBerry MQTT-Gateway“.
+* Der Automatik-Designer der Loxone-App kann „auto“ ebenfalls zeitgesteuert schicken – ohne Zeitfenster, Abstand,
+  Wetter, Sonne, Anwesenheit und Wirkungsmessung.
 
 ## Neu in 0.9.30
 
@@ -400,9 +427,12 @@ abfragen und zählen. Am 28.08.2026 an einer Anlage mit 25 Jalousien gemessen:
 13 mit `autoActive = 1`, 12 mit `0`. Der Zentralbaustein `CentralJalousie` führt
 diesen Zustand **nicht** und wird deshalb nicht mitgezählt.
 
-Die Messung ist ab Werk **aus**: sie fragt je Jalousie mehrere Zustände ab, und
-auf einer großen Anlage ist das spürbare Last. Eingeschaltet läuft sie höchstens
-einmal je Viertelstunde.
+Die Messung ist ab Werk **aus**: sie fragt je Jalousie Zustände ab, und auf
+einer großen Anlage ist das spürbare Last. Eingeschaltet zählt der Takt seit
+0.9.31 im Zeitfenster alle 15 Minuten, auch ohne Befehl, und liest dabei nur
+`autoActive` (höchstens 40 Jalousien, Abbruch nach drei Fehlschlägen in Folge
+oder 60 s); der Knopf im Reiter Test zählt sofort und liest auch den Grund.
+Ohne Zählung stehen `SCHARF` und `AUTOMATIKEN` auf -1.
 
 **Hat sich danach etwas bewegt?** Eingeschaltet liest das Plugin außerdem
 unmittelbar **vor** jedem Befehl (Takt, `aktion=jetzt`, Knopf im Reiter Test)
