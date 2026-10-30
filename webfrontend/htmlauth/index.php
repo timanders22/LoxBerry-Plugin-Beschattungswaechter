@@ -1835,6 +1835,11 @@ if (empty($bw_cfg['mqtt_ein'])) {
     }
 }
 
+/* Nachtwelle N4 (0.9.33): stehen unter MQTT-Gateway V2 die Haken der Hakenliste (Reiter MQTT) mit dem richtigen
+   Noncached? Liest config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT ein Strich. */
+list($bw_v2s, $bw_v2t) = bw_v2_haken_lage($bw_cfg);
+bw_zeile($bw_selbst, bw_t('TEXT.S_V2_HAKEN'), $bw_v2s, $bw_v2t);
+
 /* Die Wetterquelle (Wetter-1, ab Werk aus). Im Reiter Test ein ECHTER
    Abruf ueber 127.0.0.1 - nur, wenn er serverseitig offen ist (wie der
    Endpunkt oben); sonst der Stand des letzten Takts. Dieselbe Rechnung wie
