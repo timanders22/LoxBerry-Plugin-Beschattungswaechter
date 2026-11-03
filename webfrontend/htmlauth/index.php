@@ -341,6 +341,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
  *
  * Eigenes Formular 'endpunkt' im Reiter Einbindung, Abschnitt "Bestehende Anlagen". Ab Werk aus, nach einem Update an.
  * jetzt/pruefen mit Merkwort wirken unabhaengig davon. */
+/* 0.9.34: Sprachansagen, eigenes Formular, eigene Datei. Die Testansage spricht immer. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_test'])) {
+    list($bw_at, $bw_ag) = bw_ansage_test();
+    if ($bw_at) { $bw_meldungen[] = bw_t('ANSAGEPLUGIN.M_TEST_OK'); } else { $bw_fehler[] = bw_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $bw_ag; }
+    $bw_tab = 'tab-settings';
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_speichern'])) {
+    list($bw_ao, $bw_af, $bw_ah) = bw_ansage_post($_POST);
+    foreach ($bw_af as $bw_ax) { $bw_fehler[] = $bw_ax; }
+    if ($bw_ao && !$bw_af) { $bw_meldungen[] = bw_t('ANSAGEPLUGIN.M_OK'); foreach ($bw_ah as $bw_ax) { $bw_meldungen[] = $bw_ax; } }
+    elseif (!$bw_af) { $bw_fehler[] = bw_t('ANSAGEPLUGIN.M_FEHL'); }
+    $bw_tab = 'tab-settings';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_endpunkt'])) {
     $bw_neu = $bw_cfg;
     $bw_neu['endpunkt_ein'] = empty($_POST['endpunkt_ein']) ? 0 : 1;
@@ -1045,6 +1058,7 @@ if ($bw_ms_fehlt) { ?>
 </div>
 </form>
 
+<?= bw_ansage_form_html(bw_fmt() . '<input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 <h2><?= bw_t('TEXT.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= bw_t('TEXT.SICH_ERKLAERUNG') ?></div>
 <div class="sm-hinweis"><?= bw_t('TEXT.SICH_INHALT') ?></div>
