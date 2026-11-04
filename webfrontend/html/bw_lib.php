@@ -1116,7 +1116,7 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
         if (PHP_VERSION_ID < 80000) { curl_close($ch); }
         if ($antwort === false && $code === 0) {
             return array('ok' => false, 'code' => 0,
-                         'text' => $fehler !== '' ? $fehler : 'keine Antwort', 'url' => $url);
+                         'text' => $fehler !== '' ? $fehler : bw_t('TEXT.E_KEINE_ANTWORT'), 'url' => $url);
         }
     } else {
         /* Der Weg ohne curl - seit 0.9.22 ueber bw_http_ohne_curl() (C4). */
@@ -1134,7 +1134,7 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
     return array(
         'ok'   => ($code >= 200 && $code < 300),
         'code' => $code,
-        'text' => $antwort === false ? 'keine Antwort' : trim((string) $antwort),
+        'text' => $antwort === false ? bw_t('TEXT.E_KEINE_ANTWORT') : trim((string) $antwort),
         'url'  => $url,
     );
 }
@@ -3331,7 +3331,7 @@ function bw_holen($url, array $kopf, $frist)
         return array($code, $a === false ? null : $a, $f);
     }
     list($code, $a) = bw_http_ohne_curl($url, $kopf, $frist);
-    return array($code, $a === false ? null : $a, $code === 0 ? 'keine Antwort' : '');
+    return array($code, $a === false ? null : $a, $code === 0 ? bw_t('TEXT.E_KEINE_ANTWORT') : '');
 }
 
 /**
@@ -3624,6 +3624,7 @@ function bw_ansage_k()
         'ordner' => @is_dir($d) ? $d : '',
         't' => function ($s) { return bw_t($s); },
         'werk' => ansage_werk_modus(),
+        'nacht_lage' => bw_t('ANSAGEPLUGIN.T_R_NACHT'),     // Stamm 1.4.0: diese Linie holt nach
     );
 }
 
@@ -3707,7 +3708,7 @@ function bw_ansage_form_html($felder)
     $o[] = '<h2>' . $e(bw_t('ANSAGEPLUGIN.H')) . '</h2>';
     $o[] = '<form action="index.php" method="post" autocomplete="off">' . $felder;
     $o[] = ansage_formular_html(bw_tts($cfg), $h + array('modi' => bw_ansage_modi(), 'ziele' => true, 'ziele_post' => isset($ein['tts_ziel_art']) ? $ein : null), $k);
-    $o[] = ansage_regeln_html(bw_ansage_regeln($cfg), isset($cfg['ansage_haken']) && is_array($cfg['ansage_haken']) ? $cfg['ansage_haken'] : array('stoerung' => 1), bw_ansage_anlaesse(), $h + array('token_vor_ort' => true), $k);
+    $o[] = ansage_regeln_html(bw_ansage_regeln($cfg), isset($cfg['ansage_haken']) && is_array($cfg['ansage_haken']) ? $cfg['ansage_haken'] : array('stoerung' => 1), bw_ansage_anlaesse(), $h + array('nacht_hinweis' => bw_t('ANSAGEPLUGIN.R_NACHT_HINWEIS'), 'token_vor_ort' => true), $k);
     $o[] = '<div class="sm-feld"><label for="ansage_fruehestens">' . $e(bw_t('ANSAGEPLUGIN.L_FRUEH')) . '</label>'
          . '<input data-role="none" type="time" id="ansage_fruehestens" name="ansage_fruehestens" value="' . $e(call_user_func($h['w'], 'ansage_fruehestens', isset($cfg['ansage_fruehestens']) ? $cfg['ansage_fruehestens'] : '07:30')) . '"' . call_user_func($h['m'], 'ansage_fruehestens') . '>'
          . '<div class="sm-hilfe">' . $e(bw_t('ANSAGEPLUGIN.H_FRUEH')) . '</div></div>';
@@ -3812,7 +3813,7 @@ function bw_ansage_token_pflegen($cfg = null)
 function bw_ansage_vor_ort($cfg = null)
 {
     if ($cfg === null) { $cfg = bw_ansage_cfg(); }
-    return ansage_token_fuer_lauf(bw_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), bw_ansage_k());
+    return ansage_tafel_einreihen(ansage_token_fuer_lauf(bw_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), bw_ansage_k()), bw_ansage_regeln($cfg), bw_ansage_k(), true);     // Stamm 1.4.0: die Tafel, wenn sie bereitsteht
 }
 
 /** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */

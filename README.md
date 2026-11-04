@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.34
+Version 0.9.35
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,13 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.35
+
+* **Ansagen auch auf den offenen Dashboard-Tafeln, ab Werk an.** Mit Dashboard ab 0.9.40 und einer offenen Tafel kommt jede Ansage dieses Plugins auch dort an: Gong, Sprache und der Text groß. Ohne Dashboard oder ohne offene Tafel wird das Ziel ohne Fehler übergangen. Ausschalten: Reiter *Einstellungen*, Haken „Auch auf offenen Dashboard-Tafeln ansagen“; ein gespeichertes Aus bleibt. Es gelten dieselben Regeln wie für die Lautsprecher.
+* **Berichtigt:** Der Hinweis unter „Nachtruhe einhalten“ sagte das Gegenteil dessen, was das Plugin tut. Es spricht in der Nachtruhe nie, auch keine Störung; sie wird gemerkt und danach angesagt.
+* **Berichtigt:** Auf einem englischen LoxBerry steht in den Testzeilen nicht mehr das deutsche „keine Antwort“.
+* **Gemeinsame Sprachausgabe 1.4.0.** Einstellungen und ein gespeichertes Aus bleiben, wie sie sind; am Gerät ist nichts einzurichten.
 
 ## Neu in 0.9.34
 
