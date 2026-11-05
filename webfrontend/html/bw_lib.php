@@ -3684,6 +3684,8 @@ function bw_ansage_post(array $post)
         return array(false, $t, array());
     }
     $cfg['tts'] = $neu;
+    // 0.9.36: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.35 ueberschrieb es der naechste Abgleich.
+    $cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($post, isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array());
     $cfg['ansage_regeln'] = $r;
     $cfg['ansage_haken'] = $hk;
     $t = array();
