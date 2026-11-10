@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.37
+Version 0.9.38
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,10 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.38
+
+- Miniserver-Passwort mit Sonderzeichen: Das Plugin meldet sich jetzt mit dem Klartext aus `Admin_raw`/`Pass_raw` der LoxBerry-Einstellungen an. Bisher nahm es die für Adressen kodierte Form (aus `!` wurde `%21`), und der Miniserver antwortete mit HTTP 401 (Issue #2). Fehlen die Klartextfelder, wird die kodierte Form zurückgewandelt.
 
 ## Neu in 0.9.37
 
