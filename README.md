@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.39
+Version 0.9.40
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,14 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.40
+
+- **Verbindung zum Miniserver wie LoxBerry:** Im Reiter *Einstellungen* steht unter dem Miniserver die Auswahl *Verbindung zum Miniserver* mit *wie LoxBerry*, *unverschlüsselt* und *verschlüsselt (TLS)* (Schlüssel `tls` in `beschattung.json`: `"auto"`, `0`, `1`; jeder andere Wert wird abgewiesen, im Formular wie beim Zurückspielen einer Sicherung). *Wie LoxBerry* verbindet verschlüsselt, wenn `general.json` den Miniserver mit `Preferhttps` 1 oder `Transport` `https` führt, und nimmt dann `Porthttps` (fehlt er oder ist er ungültig: 443), sonst `Port` (fehlt er: 80). Das gilt für den Befehl, die Projektdatei und jeden gelesenen Zustand, weil alle drei seit dieser Fassung über denselben Abrufweg gehen. Verschlüsselt wird die IP-Adresse aus der LoxBerry-Konfiguration angesprochen; das Zertifikat des Miniservers lautet auf einen Namen unter `dyndns.loxonecloud.com` und wird deshalb nicht geprüft (dieselbe Abwägung wie im Dashboard-Plugin 0.9.44).
+- Neue Installationen und bestehende Anlagen beginnen mit *wie LoxBerry*: fehlt der Schlüssel, wird die Konfiguration mit `"auto"` vervollständigt. Wer ausdrücklich *unverschlüsselt* wählt (`tls` 0), behält das; führt der LoxBerry den Miniserver mit https, sind die Zeile *Verbindung zum Miniserver* in der Übersicht und die Zeile *Passt die Verbindungsart zum LoxBerry?* im Reiter *Test* rot, mit dem Rat, auf *wie LoxBerry* zu stellen, und das Protokoll nennt den Widerspruch einmal je Lauf, höchstens einmal je Stunde. Eine Sicherung aus 0.9.39 oder früher trägt den Schlüssel nicht; beim Zurückspielen bleibt die geltende Verbindung stehen.
+- **Umleitung auf https:** Antwortet der Miniserver mit 301, 302, 307 oder 308 und einer https-Adresse, steht das als eigene Zeile im Protokoll („Der Miniserver verlangt eine verschluesselte Verbindung (HTTP 308, Umleitung auf https) …“), ebenfalls höchstens einmal je Stunde; der Fehler beim Senden und die Zeile im Reiter *Test* nennen die Umleitung statt eines leeren „HTTP 308“. Gefolgt wird ihr nicht. Anlass: seit der Firmware 17.3 leitet ein Miniserver mit Pflicht zu https jede Anfrage an `http://<IP>:80` mit 308 auf eine Adresse unter `dyndns.loxonecloud.com` um; das Plugin baute bis 0.9.39 immer `http://<IP>:<Port>` und bekam nur „HTTP 308“ zurück.
+- Der Reiter *Test* fragt beim Öffnen den Miniserver über genau diesen Weg (`jdev/cfg/api`, ohne Zugangsdaten) und zeigt einen Haken nur, wenn er antwortet.
+- Geprüft in einem Prüfstand auf dem Arbeitsrechner unter PHP 7.4, 8.4 und 8.5, mit und ohne curl, mit einer `general.json` wie am LoxBerry gemessen; auf einem LoxBerry ist diese Fassung noch nicht installiert.
 
 ## Neu in 0.9.39
 

@@ -247,6 +247,12 @@ function bw_vorgaben()
         'aktiv'        => 0,
         'ms'           => 0,
         'ms_nr'        => '',
+        /* Seit 0.9.40 (Punkt G1, Entscheidung des Hausherrn 11.11.2026: neue Standardkonfiguration): die
+           Verbindung zum Miniserver. 'auto' = wie LoxBerry (bw_ms_verbindung()), daneben 0 (unverschluesselt) und
+           1 (verschluesselt, TLS) - nur genau diese drei Werte (bw_wert_tls()). Eine Datei ohne den Schluessel
+           gilt als 'auto' und wird damit vervollstaendigt; ein ausdruecklich gespeichertes 0 bleibt 0 (G3) -
+           gemeldet wird der Widerspruch zum LoxBerry, umgedeutet wird nichts. */
+        'tls'          => 'auto',
         'uuid'         => '',
         'befehl'       => 'auto',
         /* Gruppe 29 (0.9.32): auch die Ziele 2-6 ab Werk auto - gemessen am 26.10.2026 an einem Rollladen:
@@ -314,7 +320,9 @@ function bw_sicherung_spaeter()
        Gruppe 23 (0.9.31): die vier neuen Schluessel (N15, E-E14). */
     return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max',
                  'sonne_ein', 'fassade', 'fassade2', 'fassade3', 'fassade4', 'fassade5', 'fassade6',
-                 'endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist');
+                 'endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist',
+                 /* 0.9.40 (G2): die Verbindung zum Miniserver - mit dem GELTENDEN Wert (bw_sicherung_geltend()). */
+                 'tls');
 }
 
 /** Die Kennungen und Befehle aller eingerichteten Ziele, in ihrer Reihenfolge. */
@@ -385,6 +393,10 @@ function bw_wert_pruefen($schluessel, $wert)
     if (preg_match('/^befehl[2-6]$/', $schluessel)) { $schluessel = 'befehl_weiteres'; }
     if (preg_match('/^fassade[2-6]$/', $schluessel)) { $schluessel = 'fassade'; }
     switch ($schluessel) {
+        case 'tls':
+            /* 0.9.40 (G1): genau 'auto', 0 oder 1 - am ROHEN Wert, nicht an der Zeichenkette $s: "1", true, 1.0 und
+               ' auto' werden abgewiesen, nicht gedeutet. Das Formular wandelt '0'/'1' vorher in Zahlen. */
+            return bw_wert_tls($wert);
         case 'aktiv':
         case 'mqtt_ein':
         case 'pruefen_ein':
@@ -957,11 +969,21 @@ function bw_miniserver()
         if ($adresse === '') {
             continue;
         }
+        /* 0.9.40 (G1): was der LoxBerry ueber die Verschluesselung sagt. Preferhttps "1" oder Transport "https"
+           heisst: der LoxBerry fuehrt den Miniserver mit https (am Geraet 11.11.2026: Transport https,
+           Preferhttps 1, Porthttps 443, Port 80). 'port' bleibt der unverschluesselte Port wie bis 0.9.39;
+           welcher Port und welches Schema gelten, entscheidet allein bw_ms_verbindung(). */
+        $pref = isset($ms['Preferhttps']) ? $ms['Preferhttps'] : null;
+        $lb_https = ($pref === true || (is_scalar($pref) && !is_bool($pref) && trim((string) $pref) === '1'))
+            || (isset($ms['Transport']) && is_string($ms['Transport']) && strtolower(trim($ms['Transport'])) === 'https');
         $aus[] = array(
             'nr'      => (string) $nr,
             'name'    => !empty($ms['Name']) ? $ms['Name'] : ('Miniserver ' . $nr),
             'adresse' => $adresse,
             'port'    => !empty($ms['Port']) ? (int) $ms['Port'] : 80,
+            'porthttps' => (isset($ms['Porthttps']) && is_scalar($ms['Porthttps']) && !is_bool($ms['Porthttps']))
+                ? trim((string) $ms['Porthttps']) : '',
+            'lb_https' => $lb_https,
             'user'    => bw_ms_zugang($ms, 'Admin_raw', 'Admin', 'Username'),
             'pass'    => bw_ms_zugang($ms, 'Pass_raw', 'Pass', 'Password'),
         );
@@ -1019,7 +1041,7 @@ function bw_miniserver_gewaehlt(array $c, ?array $alle = null)
     if ($nr !== '') {
         foreach ($alle as $m) {
             if ($m['nr'] === $nr) {
-                return $m;
+                return bw_ms_ergaenzen($m, $c);
             }
         }
         /* GESETZT UND UNAUFFINDBAR IST EIN FEHLER, KEINE RUECKFALLEBENE.
@@ -1037,7 +1059,203 @@ function bw_miniserver_gewaehlt(array $c, ?array $alle = null)
         return null;
     }
     $i = isset($c['ms']) ? (int) $c['ms'] : 0;
-    return isset($alle[$i]) ? $alle[$i] : $alle[0];
+    return bw_ms_ergaenzen(isset($alle[$i]) ? $alle[$i] : $alle[0], $c);
+}
+
+/* ==================================================================
+ * DIE VERBINDUNG ZUM MINISERVER (seit 0.9.40, Punkte G1-G4)
+ * ==================================================================
+ *
+ * Seit Firmware 17.3 leitet ein Miniserver mit Pflicht zu https jede
+ * Anfrage an http://<ip>:80 mit 308 auf https://<ip-mit-bindestrichen>.
+ * <serien>.dyndns.loxonecloud.com um (am 11.11.2026 gemessen). Bis 0.9.39
+ * baute das Plugin an vier Stellen http://<Ipaddress>:<Port> und las
+ * Porthttps/Preferhttps nirgends; curl und der Datenstrom folgen der
+ * Umleitung nicht (CURLOPT_FOLLOWLOCATION false, follow_location 0 - so
+ * gewollt, Regeln/03), und es kam HTTP 308 mit leerem Rumpf an: bw_senden()
+ * gab Code 308 mit leerem Text zurueck, die Strukturdatei "Der Miniserver
+ * antwortete mit HTTP 308", keine Zeile nannte die Umleitung (0.9.39 am
+ * Pruefstand gemessen unter PHP 7.4.33, 8.4.27 und 8.5.12, mit und ohne curl,
+ * Pruefung-Beschattungswaechter-0.9.40/eichung.txt).
+ *
+ * Seither: EINE Entscheidung (bw_ms_verbindung()), angehaengt an den
+ * gewaehlten Miniserver (bw_ms_ergaenzen() aus bw_miniserver_gewaehlt()),
+ * und EIN Abrufweg (bw_ms_abruf()) fuer Befehl, Strukturdatei und Zustaende.
+ *
+ * ZERTIFIKAT: Die rohe IP traegt kein passendes Zertifikat - gemessen am
+ * 12.11.2026 an der Anlage: Let's Encrypt fuer *.<serien>.dyndns.loxonecloud.com,
+ * gegen die IP "IP address mismatch". Der dyndns-Name braucht eine
+ * Namensaufloesung, die die FRITZ!Box im Heimnetz verweigert (DNS-Rebind-
+ * Schutz, Regeln/12). Deshalb dieselbe Entscheidung wie der Dashboard-Dienst
+ * 0.9.44 (lox_client.py _ssl_kontext()): die IP aus der LoxBerry-
+ * Konfiguration, verschluesselt, aber ohne Pruefung von Name und Kette. Wer
+ * sich zwischen LoxBerry und Miniserver haengen kann, koennte sich als
+ * Miniserver ausgeben; im Heimnetz ist das die uebliche Abwaegung.
+ * ================================================================== */
+
+/** Ist $w ein erlaubter Wert fuer tls? Nur genau 'auto', 0 und 1 - kein true, kein "1", kein 1.0 (G1). */
+function bw_wert_tls($w)
+{
+    return $w === 'auto' || $w === 0 || $w === 1;
+}
+
+/**
+ * Die Verbindung zu einem Miniserver aus bw_miniserver(), wie das Plugin sie waehlt.
+ *
+ * 'auto': TLS genau dann, wenn der LoxBerry https sagt (lb_https); 1 immer; 0 nie. Port bei TLS Porthttps
+ * (fehlt oder ungueltig: 443), sonst Port (fehlt: 80). Ein anderer Wert wird nicht gedeutet: tls null, und
+ * bw_ms_abruf() fragt dann nicht. Rueckgabe: wahl, lb_https, tls (true/false/null), port, widerspruch (tls=0,
+ * der LoxBerry fuehrt den Miniserver aber mit https - G3: gemeldet, nicht umgedeutet).
+ */
+function bw_ms_verbindung(array $m, array $c)
+{
+    $wahl = array_key_exists('tls', $c) ? $c['tls'] : 'auto';
+    $lb_https = !empty($m['lb_https']);
+    $aus = array('wahl' => $wahl, 'lb_https' => $lb_https, 'tls' => null, 'port' => 0, 'widerspruch' => false);
+    if (!bw_wert_tls($wahl)) {
+        return $aus;
+    }
+    $aus['tls'] = ($wahl === 'auto') ? $lb_https : ($wahl === 1);
+    if ($aus['tls']) {
+        $roh = isset($m['porthttps']) ? (string) $m['porthttps'] : '';
+        $n = preg_match('/^[0-9]{1,5}\z/', $roh) ? (int) $roh : 0;
+        $aus['port'] = ($n >= 1 && $n <= 65535) ? $n : 443;
+    } else {
+        $aus['port'] = !empty($m['port']) ? (int) $m['port'] : 80;
+    }
+    $aus['widerspruch'] = ($wahl === 0 && $lb_https);
+    return $aus;
+}
+
+/** Den gewaehlten Miniserver um die Verbindung ergaenzen: 'verbindung' und 'basis' ('' bei ungueltiger Wahl). */
+function bw_ms_ergaenzen(array $m, array $c)
+{
+    $m['verbindung'] = bw_ms_verbindung($m, $c);
+    $v = $m['verbindung'];
+    $m['basis'] = $v['tls'] === null ? ''
+        : (($v['tls'] ? 'https' : 'http') . '://' . $m['adresse'] . ':' . (int) $v['port']);
+    return $m;
+}
+
+/** Die Verbindung in Worten fuer Oberflaeche und Reiter Test, z. B. "verschluesselt (TLS), Port 443". */
+function bw_ms_verbindung_text(array $v)
+{
+    if ($v['tls'] === null) {
+        return bw_t('TEXT.TLS_UNGUELTIG_KURZ');
+    }
+    return sprintf(bw_t($v['tls'] ? 'TEXT.TLS_IST_EIN' : 'TEXT.TLS_IST_AUS'), (int) $v['port']);
+}
+
+/** Der Satz zum Widerspruch tls=0 gegen einen LoxBerry mit https (G3) - fuer das Protokoll, einsprachig. */
+function bw_tls_widerspruch_satz()
+{
+    return 'Verbindungsart: eingestellt ist "unverschluesselt" (tls=0), der LoxBerry fuehrt den Miniserver aber '
+         . 'mit https. Rat: im Reiter Einstellungen "Verbindung zum Miniserver" auf "wie LoxBerry" stellen. '
+         . 'Von selbst wird der Wert nicht umgestellt.';
+}
+
+/** Der Satz zur Umleitung auf https (G4) - fuer das Protokoll. Ohne Zieladresse: sie traegt die Seriennummer. */
+function bw_umleitung_satz($code)
+{
+    return sprintf('Der Miniserver verlangt eine verschluesselte Verbindung (HTTP %d, Umleitung auf https). Im Reiter '
+         . 'Einstellungen "Verbindung zum Miniserver" auf "wie LoxBerry" oder "verschluesselt (TLS)" stellen.', (int) $code);
+}
+
+/**
+ * Hat dieser Lauf eine Umleitung auf https gesehen? Mit $code (3xx) wird sie vermerkt und EINMAL gemeldet:
+ * eine eigene Protokollzeile je Lauf, ueber Laeufe hinweg hoechstens einmal je Stunde (bw_log_wenn_neu() - ein
+ * Fuenfminutentakt schriebe sie sonst 288-mal am Tag). Rueckgabe: der zuletzt gesehene Code oder 0.
+ */
+function bw_umleitung($code = null)
+{
+    static $gesehen = 0;
+    if ($code !== null) {
+        if ($gesehen === 0) {
+            bw_log_wenn_neu('umleitung', bw_umleitung_satz($code));
+        }
+        $gesehen = (int) $code;
+    }
+    return $gesehen;
+}
+
+/** Den Widerspruch tls=0 gegen LoxBerry-https einmal je Lauf melden (G3), hoechstens einmal je Stunde. */
+function bw_tls_widerspruch_melden(array $v)
+{
+    static $gemeldet = false;
+    if (!empty($v['widerspruch']) && !$gemeldet) {
+        $gemeldet = true;
+        bw_log_wenn_neu('tls_widerspruch', bw_tls_widerspruch_satz());
+    }
+}
+
+/**
+ * DER EINE ABRUFWEG zum Miniserver (G1): Befehl (bw_senden()), Strukturdatei (bw_struktur_holen()), Zustaende
+ * (bw_zustand_lesen()) und die Probe im Reiter Test gehen hierueber. $m kommt aus bw_miniserver_gewaehlt().
+ * Rueckgabe: array(HTTP-Code oder 0, Rumpf|null, Fehlertext, Adresse ohne Zugangsdaten, umgeleitet auf https?).
+ * Eine Umleitung (301/302/307/308 mit einer https-Location) wird hier erkannt und ueber bw_umleitung() einmal je
+ * Lauf gemeldet (G4); gefolgt wird ihr nie.
+ */
+function bw_ms_abruf(array $m, $pfad, array $kopf, $frist)
+{
+    if (!isset($m['basis']) || $m['basis'] === '') {
+        return array(0, null, bw_t('TEXT.TLS_UNGUELTIG_KURZ'), '', false);
+    }
+    $url = $m['basis'] . $pfad;
+    if (isset($m['verbindung']) && is_array($m['verbindung'])) {
+        bw_tls_widerspruch_melden($m['verbindung']);
+    }
+    list($code, $roh, $fehler, $ort) = bw_holen($url, $kopf, $frist, true);
+    $umgeleitet = in_array($code, array(301, 302, 307, 308), true)
+        && strtolower(substr((string) $ort, 0, 8)) === 'https://';
+    if ($umgeleitet) {
+        bw_umleitung($code);
+    }
+    return array($code, $roh, $fehler, $url, $umgeleitet);
+}
+
+/**
+ * Die Pruefzeile "Passt die Verbindungsart zum LoxBerry?" (G2/G3/G4) - array(Stufe, Text) mit 1 Haken, 0 Kreuz,
+ * 2 Strich (nicht gemessen). $messen = true (nur im ausdruecklich geoeffneten Reiter Test) fragt den Miniserver
+ * WIRKLICH ueber den einen Abrufweg: jdev/cfg/api, ohne Zugangsdaten (die Adresse beantwortet der Miniserver
+ * unangemeldet; der Rumpf traegt die Seriennummer und wird nicht angezeigt). Gezaehlt wird die Wirkung - eine
+ * Antwort des Miniservers mit "LL" -, nicht der Rueckgabewert der Funktion.
+ */
+function bw_verbindung_pruefzeile(array $c, $messen)
+{
+    $m = bw_miniserver_gewaehlt($c);
+    if ($m === null) {
+        return array(2, bw_t('TEXT.KEIN_MS'));
+    }
+    $v = $m['verbindung'];
+    $lage = bw_config_lage();
+    if (in_array('tls', isset($lage['verworfen']) ? $lage['verworfen'] : array(), true)) {
+        return array(0, bw_t('TEXT.S_VB_VERWORFEN'));
+    }
+    if ($v['tls'] === null) {
+        return array(0, bw_t('TEXT.TLS_UNGUELTIG_KURZ'));
+    }
+    $ist = bw_ms_verbindung_text($v);
+    if ($v['widerspruch']) {
+        return array(0, sprintf(bw_t('TEXT.S_VB_WIDERSPRUCH'), $ist));
+    }
+    if (!$messen) {
+        return array(2, sprintf(bw_t('TEXT.S_VB_NUR_TEST'), $ist));
+    }
+    list($code, $roh, $fehler, $url, $umgeleitet) = bw_ms_abruf($m, '/jdev/cfg/api', array('Accept: application/json'),
+                                                                max(2, min(30, (int) $c['timeout'])));
+    if ($umgeleitet) {
+        return array(0, sprintf(bw_t('TEXT.S_VB_UMLEITUNG'), $ist, $code));
+    }
+    if ($code === 0) {
+        /* Kein bw_e() hier: der Reiter Test maskiert die Spalte selbst (index.php, bw_e($bw_z['wie'])). */
+        return array(0, sprintf(bw_t('TEXT.S_VB_STUMM'), $ist, $fehler));
+    }
+    $ll = bw_ll_code($roh);
+    if ($code === 200 && $ll >= 200 && $ll < 300) {
+        return array(1, sprintf(bw_t('TEXT.S_VB_GUT'), $ist,
+                                bw_t($v['lb_https'] ? 'TEXT.TLS_LB_EIN' : 'TEXT.TLS_LB_AUS')));
+    }
+    return array(0, sprintf(bw_t('TEXT.S_VB_HTTP'), $ist, $code));
 }
 
 /** Kennung pruefen: Loxone-UUID oder ein Bausteinname ohne Sonderzeichen. */
@@ -1107,47 +1325,43 @@ function bw_senden(array $c, $uuid = null, $befehl = null)
        nur das Senden unterbleibt. Eine zweite Funktion, die den Vorgang
        beschreibt, liefe mit dem Sendecode auseinander, und dann zeigte die
        Vorschau etwas anderes an, als der Ernstfall tut. */
+    /* Der Befehl kann einen Schraegstrich tragen (autoshade/1). Er ist ein
+       Pfadtrenner und wird deshalb NICHT mitkodiert - die Kennung schon. */
+    $pfad = rawurlencode($uuid) . '/' . implode('/', array_map('rawurlencode', explode('/', $befehl)));
+    /* 0.9.40 (G1): ohne gueltige Verbindungsart wird nicht gesendet - und auch nicht geprobt. In bw_config()
+       kann das nicht entstehen (ein verworfener Wert gilt dort als Vorgabe); es faengt einen Aufrufer ab, der
+       eine rohe Konfiguration uebergibt. */
+    if ($m['basis'] === '') {
+        return array('ok' => false, 'code' => 0, 'text' => 'Verbindungsart (tls) ungueltig - es wurde nicht gesendet',
+                     'meldung' => bw_t('TEXT.TLS_UNGUELTIG_KURZ'), 'url' => '');
+    }
     if (bw_trocken()) {
         return array('ok' => true, 'code' => 0, 'probe' => true,
                      'text' => 'PROBE - es wurde NICHTS gesendet',
                      'meldung' => bw_t('TEXT.SENDEN_PROBE'),
-                     'url' => 'http://' . $m['adresse'] . ':' . $m['port'] . '/dev/sps/io/'
-                            . rawurlencode($uuid) . '/'
-                            . implode('/', array_map('rawurlencode', explode('/', $befehl))));
+                     'url' => $m['basis'] . '/dev/sps/io/' . $pfad);
     }
-    /* Der Befehl kann einen Schraegstrich tragen (autoshade/1). Er ist ein
-       Pfadtrenner und wird deshalb NICHT mitkodiert - die Kennung schon. */
-    $pfad = rawurlencode($uuid) . '/' . implode('/', array_map('rawurlencode', explode('/', $befehl)));
-    $url = 'http://' . $m['adresse'] . ':' . $m['port'] . '/dev/sps/io/' . $pfad;
     $frist = max(2, min(30, (int) $c['timeout']));
     $kopf = array('Accept: */*');
     if ($m['user'] !== '') {
         $kopf[] = 'Authorization: Basic ' . base64_encode($m['user'] . ':' . $m['pass']);
     }
 
-    $antwort = false;
-    $code = 0;
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, array(
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => $kopf,
-            CURLOPT_CONNECTTIMEOUT => $frist,
-            CURLOPT_TIMEOUT        => $frist,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_USERAGENT      => 'LoxBerry Beschattungswaechter',
-        ));
-        $antwort = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $fehler = curl_error($ch);
-        if (PHP_VERSION_ID < 80000) { curl_close($ch); }
-        if ($antwort === false && $code === 0) {
-            return array('ok' => false, 'code' => 0,
-                         'text' => $fehler !== '' ? $fehler : bw_t('TEXT.E_KEINE_ANTWORT'), 'url' => $url);
-        }
-    } else {
-        /* Der Weg ohne curl - seit 0.9.22 ueber bw_http_ohne_curl() (C4). */
-        list($code, $antwort) = bw_http_ohne_curl($url, $kopf, $frist);
+    /* 0.9.40 (G1): derselbe Abrufweg wie Strukturdatei und Zustaende (bw_ms_abruf() -> bw_holen()); bis 0.9.39
+       stand hier ein eigener curl-Block. Er verhielt sich gleich: keine Weiterleitung, Zeitschranke auch fuer den
+       Aufbau, bei curl der curl-Fehlertext, ohne curl TEXT.E_KEINE_ANTWORT. */
+    list($code, $roh, $fehler, $url, $umgeleitet) = bw_ms_abruf($m, '/dev/sps/io/' . $pfad, $kopf, $frist);
+    $antwort = ($roh === null) ? false : $roh;
+    if ($code === 0) {
+        return array('ok' => false, 'code' => 0,
+                     'text' => $fehler !== '' ? $fehler : bw_t('TEXT.E_KEINE_ANTWORT'), 'url' => $url);
+    }
+    /* G4: eine Umleitung auf https bekommt einen Satz statt des leeren Rumpfs - im Protokoll ("FEHLER beim
+       Senden an Ziel 1: HTTP 308 ...") und in der Oberflaeche. */
+    if ($umgeleitet) {
+        return array('ok' => false, 'code' => $code,
+                     'text' => 'Umleitung auf https - der Miniserver verlangt eine verschluesselte Verbindung',
+                     'meldung' => bw_t('TEXT.SENDEN_UMLEITUNG'), 'url' => $url);
     }
 
     /* N3 (Gruppe 23): traegt der Rumpf einen LL-Code (Code="200"), zaehlt er - ein unbekannter Befehl kann mit
@@ -2942,7 +3156,12 @@ function bw_struktur_holen(array $c, $frisch = false)
     if ($m === null) {
         return array(0, bw_t('TEXT.KEIN_MS'), array());
     }
-    $url = 'http://' . $m['adresse'] . ':' . $m['port'] . '/data/LoxAPP3.json';
+    /* 0.9.40 (G1): Schema und Port aus bw_ms_verbindung() - der Merker haengt an der ganzen Adresse, eine
+       Aenderung der Verbindungsart holt also neu. */
+    if ($m['basis'] === '') {
+        return array(0, bw_t('TEXT.TLS_UNGUELTIG_KURZ'), array());
+    }
+    $url = $m['basis'] . '/data/LoxAPP3.json';
     $bw_mk = $url . '|' . $m['user'];
     if ($frisch) {
         bw_struktur_merk($bw_mk, null, true);
@@ -2957,10 +3176,14 @@ function bw_struktur_holen(array $c, $frisch = false)
            Adresse landet im Protokoll des Webservers, ein Kopf nicht. */
         $kopf[] = 'Authorization: Basic ' . base64_encode($m['user'] . ':' . $m['pass']);
     }
-    list($code, $roh, $fehler) = bw_holen($url, $kopf, max(10, (int) $c['timeout'] * 3));
+    list($code, $roh, $fehler, $url, $umgeleitet) = bw_ms_abruf($m, '/data/LoxAPP3.json', $kopf,
+                                                                max(10, (int) $c['timeout'] * 3));
     if ($code === 0) {
         return array(0, sprintf(bw_t('TEXT.STRUKTUR_STUMM'), bw_e($m['adresse']),
                                 bw_e($fehler)), array());
+    }
+    if ($umgeleitet) {
+        return array(0, sprintf(bw_t('TEXT.STRUKTUR_UMLEITUNG'), $code), array());
     }
     if ($code === 401) {
         return array(0, bw_t('TEXT.STRUKTUR_401'), array());
@@ -3081,9 +3304,9 @@ function bw_zustand_lesen(array $m, array $kopf, $uuid, $frist)
 {
     $uuid = trim((string) $uuid);
     if ($uuid === '') { return null; }
-    $url = 'http://' . $m['adresse'] . ':' . $m['port'] . '/jdev/sps/io/'
-         . rawurlencode($uuid) . '/state';
-    list($code, $roh, $fehler) = bw_holen($url, $kopf, max(2, min(30, (int) $frist)));
+    /* 0.9.40 (G1): ueber den einen Abrufweg; Schema und Port aus bw_ms_verbindung(). */
+    list($code, $roh) = bw_ms_abruf($m, '/jdev/sps/io/' . rawurlencode($uuid) . '/state', $kopf,
+                                    max(2, min(30, (int) $frist)));
     if ($code !== 200 || $roh === null) { return null; }
     $d = json_decode((string) $roh, true);
     if (is_array($d) && isset($d['LL']['value'])) {
@@ -3337,28 +3560,43 @@ function bw_wirkung_text(array $c, array $stand)
 /**
  * Ein HTTP-Abruf mit einer Zeitschranke, die auch den VERBINDUNGSAUFBAU deckt.
  *
- * Rueckgabe: array(HTTP-Code, Rumpf|null, Fehlertext).
+ * Rueckgabe: array(HTTP-Code, Rumpf|null, Fehlertext, Location-Kopf oder '').
+ *
+ * $miniserver (seit 0.9.40, G1): der Abruf geht an den Miniserver (nur aus
+ * bw_ms_abruf()). Bei https wird das Zertifikat dann nicht geprueft - die
+ * Begruendung steht ueber bw_wert_tls(). Jeder andere Abruf (Wetter ueber
+ * 127.0.0.1) bleibt, wie er war. Gefolgt wird einer Weiterleitung in keinem
+ * Fall; ihr Ziel steht im vierten Feld, damit bw_ms_abruf() sie erkennt.
  */
-function bw_holen($url, array $kopf, $frist)
+function bw_holen($url, array $kopf, $frist, $miniserver = false)
 {
+    $tls_ohne_pruefung = $miniserver && strtolower(substr((string) $url, 0, 8)) === 'https://';
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
-        curl_setopt_array($ch, array(
+        $opt = array(
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER     => $kopf,
             CURLOPT_CONNECTTIMEOUT => $frist,
             CURLOPT_TIMEOUT        => $frist,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_USERAGENT      => 'LoxBerry Beschattungswaechter',
-        ));
+        );
+        if ($tls_ohne_pruefung) {
+            $opt[CURLOPT_SSL_VERIFYPEER] = false;
+            $opt[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+        curl_setopt_array($ch, $opt);
         $a = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $f = curl_error($ch);
+        /* Das Ziel einer nicht befolgten Weiterleitung (CURLINFO_REDIRECT_URL, seit PHP 5.3.7) - am Pruefstand
+           unter 7.4.33, 8.4.27 und 8.5.12 gemessen: bei 308 die volle https-Adresse, sonst leer. */
+        $ort = ($code >= 300 && $code < 400) ? (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL) : '';
         if (PHP_VERSION_ID < 80000) { curl_close($ch); }
-        return array($code, $a === false ? null : $a, $f);
+        return array($code, $a === false ? null : $a, $f, $ort);
     }
-    list($code, $a) = bw_http_ohne_curl($url, $kopf, $frist);
-    return array($code, $a === false ? null : $a, $code === 0 ? bw_t('TEXT.E_KEINE_ANTWORT') : '');
+    list($code, $a, $ort) = bw_http_ohne_curl($url, $kopf, $frist, $tls_ohne_pruefung);
+    return array($code, $a === false ? null : $a, $code === 0 ? bw_t('TEXT.E_KEINE_ANTWORT') : '', $ort);
 }
 
 /**
@@ -3379,19 +3617,28 @@ function bw_holen($url, array $kopf, $frist)
  * wie bisher; bei einer Weiterleitung stehen mehrere Statuszeilen darin, es
  * gilt die letzte.
  *
- * Rueckgabe: array(HTTP-Code oder 0, Rumpf oder false).
+ * Rueckgabe: array(HTTP-Code oder 0, Rumpf oder false, Location-Kopf oder '').
+ *
+ * $tls_ohne_pruefung (seit 0.9.40): nur fuer https an den Miniserver aus
+ * bw_holen() - verschluesselt, aber ohne Pruefung von Name und Kette, wie
+ * der curl-Zweig dort. Die Location steht als dritter Wert dabei (G4).
  */
-function bw_http_ohne_curl($url, array $kopf, $frist)
+function bw_http_ohne_curl($url, array $kopf, $frist, $tls_ohne_pruefung = false)
 {
     $vorher = ini_get('default_socket_timeout');
     @ini_set('default_socket_timeout', (string) $frist);
-    $ctx = stream_context_create(array('http' => array(
+    $optionen = array('http' => array(
         'method' => 'GET', 'header' => implode("\r\n", $kopf) . "\r\n",
         'timeout' => $frist, 'ignore_errors' => true,
         'follow_location' => 0, 'max_redirects' => 1,
-        'user_agent' => 'LoxBerry Beschattungswaechter')));
+        'user_agent' => 'LoxBerry Beschattungswaechter'));
+    if ($tls_ohne_pruefung) {
+        $optionen['ssl'] = array('verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true);
+    }
+    $ctx = stream_context_create($optionen);
     $code = 0;
     $rumpf = false;
+    $ort = '';
     $fh = @fopen($url, 'r', false, $ctx);
     if ($fh !== false) {
         $meta = stream_get_meta_data($fh);
@@ -3400,13 +3647,16 @@ function bw_http_ohne_curl($url, array $kopf, $frist)
         foreach ($zeilen as $z) {
             if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $t)) {
                 $code = (int) $t[1];
+                $ort = '';
+            } elseif (is_string($z) && preg_match('#^Location:\s*(\S+)#i', $z, $t)) {
+                $ort = $t[1];
             }
         }
         $rumpf = stream_get_contents($fh);
         fclose($fh);
     }
     @ini_set('default_socket_timeout', (string) $vorher);
-    return array($code, $rumpf);
+    return array($code, $rumpf, $ort);
 }
 
 
@@ -4347,7 +4597,8 @@ function bw_eingabe_felder($form)
     }
     $felder = array(
         'settings' => array(
-            'text'   => array_merge(array('ms_nr', 'uuid', 'befehl'), $ziele,
+            /* 0.9.40 (G2): tls reist als Text mit - die Auswahl zeigt einen abgewiesenen Wert als eigene Option. */
+            'text'   => array_merge(array('ms_nr', 'tls', 'uuid', 'befehl'), $ziele,
                                     array('von', 'bis', 'abstand', 'sonne_min', 'wind_max'),
                                     array('fassade', 'fassade2', 'fassade3', 'fassade4',
                                           'fassade5', 'fassade6'),
@@ -5743,7 +5994,9 @@ function bw_uebergang($d)
  */
 function bw_sicherung_geltend()
 {
-    return array('endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist');
+    /* 0.9.40 (G2/G3): tls - eine Sicherung aus 0.9.39 und frueher kennt den Schluessel nicht; dann bleibt die
+       geltende Verbindung stehen (auch ein ausdruecklich gesetztes 0), statt still auf die Vorgabe zu springen. */
+    return array('endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist', 'tls');
 }
 
 /** Warum bw_sperre() zuletzt false gab: 'belegt', 'rechte' - oder 'frei' nach Erfolg (B15/N10). */

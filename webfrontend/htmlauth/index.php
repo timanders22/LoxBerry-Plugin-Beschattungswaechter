@@ -178,6 +178,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         $bw_beanstandet[] = 'ms_nr';
     }
 
+    /* 0.9.40 (G2): die Verbindung zum Miniserver - Auswahl mit genau "auto", "0", "1". "0"/"1" werden zu Zahlen,
+       alles andere (auch ein fehlendes Feld, ein Feld statt Text, " auto") wird abgewiesen und reist mit (X-2),
+       gespeichert wird dann nichts (Entscheidung 16). Gepruefte Regel: bw_wert_pruefen('tls'). */
+    $bw_tls_roh = isset($_POST['tls']) ? $_POST['tls'] : null;
+    $bw_tls = ($bw_tls_roh === '0') ? 0 : (($bw_tls_roh === '1') ? 1 : $bw_tls_roh);
+    if (bw_wert_pruefen('tls', $bw_tls)) {
+        $bw_neu['tls'] = $bw_tls;
+    } else {
+        $bw_fehler[] = sprintf(bw_t('TEXT.FELD_ABGEWIESEN'), bw_e(bw_t('TEXT.L_TLS')),
+            bw_e($bw_tls_roh === null ? bw_t('TEXT.KURZ_LEER') : bw_kurz($bw_tls_roh)));
+        $bw_beanstandet[] = 'tls';
+    }
+
     /* B9 (Gruppe 23): wetter_token wird unten eigens behandelt (Passwortfeld); anwesend_frist (V3) ist neu. */
     $bw_felderliste = array('uuid', 'befehl', 'von', 'bis', 'abstand',
                             'sonne_min', 'wind_max', 'fassade', 'anwesend_frist');
@@ -266,6 +279,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern'])) {
         $bw_eingaben = bw_eingaben_sammeln('settings', $_POST, $bw_beanstandet);
     } elseif (bw_config_speichern($bw_neu)) {
         $bw_meldungen[] = bw_t('TEXT.GESPEICHERT');
+        /* 0.9.40 (G2): eine geaenderte Verbindungsart ins Protokoll und in die Meldung. Einen Dienst, der sie
+           haelt, gibt es nicht: der Takt (cron) und die Befehlsbruecke lesen die Konfiguration bei jedem Lauf bzw.
+           jedem Befehl neu (bin/befehle_zuordnung.php, bw_config(false) je Befehl). */
+        $bw_tls_alt = array_key_exists('tls', $bw_cfg) ? $bw_cfg['tls'] : 'auto';
+        if ($bw_tls_alt !== $bw_neu['tls']) {
+            /* Beide Werte sind hier gepruefte 'auto', 0 oder 1 (bw_config(), bw_wert_pruefen()). */
+            bw_log('Verbindung zum Miniserver: tls=' . (string) $bw_neu['tls'] . ' (vorher ' . (string) $bw_tls_alt . ').');
+            $bw_meldungen[] = bw_t('TEXT.TLS_GEAENDERT');
+        }
         $bw_cfg = bw_config();
         /* M1: eingeschaltet und Ziele gehen sofort hinaus, nicht erst mit dem
            naechsten Befehl - bis 0.9.21 stand nach dem Abschalten ueber MQTT
@@ -623,6 +645,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
                Bediener sieht keine Aenderung und drueckt noch einmal. */
             $bw_cfg = bw_config();
             $bw_meldungen[] = bw_t('TEXT.SICH_DANACH');
+            /* 0.9.40 (G2): eine Sicherung kann die Verbindungsart aendern - wie beim Speichern protokollieren. */
+            $bw_tls_alt = array_key_exists('tls', $bw_vorher) ? $bw_vorher['tls'] : 'auto';
+            if ($bw_tls_alt !== $bw_cfg['tls']) {
+                bw_log('Verbindung zum Miniserver: tls=' . (string) $bw_cfg['tls'] . ' (vorher ' . (string) $bw_tls_alt
+                       . ', aus einer Sicherung).');
+                $bw_meldungen[] = bw_t('TEXT.TLS_GEAENDERT');
+            }
             /* Wie nach dem Speichern im Reiter MQTT (M1, M2, M4): eine
                Sicherung kann Schalter und Praefix aendern. */
             $bw_nach = bw_mqtt_nach_aenderung($bw_vorher, $bw_cfg);
@@ -818,6 +847,10 @@ $bw_ms_fehlt = ($bw_ms_nr !== '' && $bw_gewaehlt === null);
 if ($bw_ms_fehlt) {
     echo '<div class="sm-warnung">' . sprintf(bw_t('TEXT.MS_FEHLT'), bw_e($bw_ms_nr)) . '</div>';
 }
+/* 0.9.40 (G3): tls=0, der LoxBerry fuehrt den Miniserver aber mit https - oben gemeldet, nicht umgedeutet. */
+if ($bw_gewaehlt !== null && !empty($bw_gewaehlt['verbindung']['widerspruch'])) {
+    echo '<div class="sm-warnung">' . bw_t('TEXT.TLS_WIDERSPRUCH') . '</div>';
+}
 ?>
 
 <?php /* Kopf (Entscheidung Nr. 43, seit 0.9.27): Statusuebersicht ueber den
@@ -835,6 +868,13 @@ if ($bw_ms_fehlt) {
         : ($bw_gewaehlt !== null
             ? '<td>' . bw_e($bw_gewaehlt['name'] . ' (' . $bw_gewaehlt['adresse'] . ')') . '</td>'
             : '<td class="sm-aus">' . bw_e(bw_t('TEXT.KEIN_MS')) . '</td>') ?></tr>
+<?php /* 0.9.40 (G3): die Verbindungsart - rot bei tls=0 gegen einen LoxBerry mit https; ohne Anfrage an den Miniserver. */
+if ($bw_gewaehlt !== null) {
+    $bw_kvb = $bw_gewaehlt['verbindung']; ?>
+<tr><td><?= bw_e(bw_t('TEXT.L_TLS')) ?></td>
+    <td class="<?= ($bw_kvb['widerspruch'] || $bw_kvb['tls'] === null) ? 'sm-aus' : '' ?>"><?= bw_e(bw_ms_verbindung_text($bw_kvb)
+        . ($bw_kvb['wahl'] === 'auto' ? ' - ' . bw_t('TEXT.TLS_AUTO') : '')) ?></td></tr>
+<?php } ?>
 <tr><td><?= bw_e(bw_t('TEXT.K_LETZTE')) ?></td>
     <td><?= empty($bw_stand['letzte']) ? '&mdash;' : bw_e(bw_zeitpunkt($bw_stand['letzte'])) ?></td></tr>
 <tr><td><?= bw_e(bw_t('TEXT.K_LETZTE_OK')) ?></td>
@@ -913,6 +953,26 @@ if ($bw_ms_fehlt) { ?>
 <?php if (!$bw_ms && !$bw_ms_fehlt) { ?><option value=""><?php echo bw_t('TEXT.KEIN_MS'); ?></option><?php } ?>
   </select>
   <p class="sm-hilfe"><?php echo bw_t('TEXT.H_MS'); ?></p>
+</div>
+
+<?php /* 0.9.40 (G2): Verbindung zum Miniserver. Nach einer Beanstandung steht der eingetippte Wert als eigene,
+   gewaehlte und markierte Option da (X-2) - ein Speichern schickt ihn dann wieder und wird wieder abgewiesen,
+   statt still eine andere Wahl zu treffen. */
+$bw_tls_ist = array_key_exists('tls', $bw_cfg) ? $bw_cfg['tls'] : 'auto';
+$bw_tls_wahl = bw_formwert($bw_eg, 'tls', is_string($bw_tls_ist) ? $bw_tls_ist : (string) (int) $bw_tls_ist); ?>
+<div class="sm-feld">
+  <label for="tls"><?php echo bw_t('TEXT.L_TLS'); ?></label>
+  <select data-role="none" name="tls" id="tls"<?= bw_markiert($bw_eg, 'tls') ?>>
+    <option value="auto"<?= $bw_tls_wahl === 'auto' ? ' selected' : '' ?>><?= bw_e(bw_t('TEXT.TLS_AUTO')) ?></option>
+    <option value="0"<?= $bw_tls_wahl === '0' ? ' selected' : '' ?>><?= bw_e(bw_t('TEXT.TLS_AUS')) ?></option>
+    <option value="1"<?= $bw_tls_wahl === '1' ? ' selected' : '' ?>><?= bw_e(bw_t('TEXT.TLS_EIN')) ?></option>
+<?php if (!in_array($bw_tls_wahl, array('auto', '0', '1'), true)) { ?>
+    <option value="<?= bw_e($bw_tls_wahl) ?>" selected><?= bw_e($bw_tls_wahl . ' ' . bw_t('TEXT.TLS_UNGUELTIG')) ?></option>
+<?php } ?>
+  </select>
+  <p class="sm-hilfe"><?= sprintf(bw_t('TEXT.H_TLS'),
+      bw_e($bw_gewaehlt !== null ? bw_t(!empty($bw_gewaehlt['lb_https']) ? 'TEXT.TLS_LB_EIN' : 'TEXT.TLS_LB_AUS') : '-'),
+      bw_e($bw_gewaehlt !== null ? bw_ms_verbindung_text($bw_gewaehlt['verbindung']) : '-')) ?></p>
 </div>
 
 <div class="sm-feld">
@@ -1751,6 +1811,14 @@ if (!$bw_ms) {
 } else {
     bw_zeile($bw_selbst, bw_t('TEXT.S_MS'), 1,
         $bw_gewaehlt['name'] . ' (' . $bw_gewaehlt['adresse'] . ')');
+}
+
+/* 0.9.40 (G2-G4): Passt die Verbindungsart zum LoxBerry? Widerspruch und ungueltiger Wert immer; die Wirkung -
+   eine Antwort des Miniservers ueber genau den Weg, den Befehl und Zaehlung nehmen - nur im ausdruecklich
+   geoeffneten Reiter Test (B1), sonst ein Strich. Eine Umleitung auf https ist ein Kreuz. */
+if ($bw_gewaehlt !== null) {
+    list($bw_vbs, $bw_vbt) = bw_verbindung_pruefzeile($bw_cfg, $bw_test_offen);
+    bw_zeile($bw_selbst, bw_t('TEXT.S_VERBINDUNG'), $bw_vbs, $bw_vbt);
 }
 
 /* Der Cron-Eintrag. Ohne ihn steht das Plugin da und tut nichts, und man
