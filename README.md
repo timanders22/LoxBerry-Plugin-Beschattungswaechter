@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.40
+Version 0.9.41
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,18 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.41
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen nach der gemeinsamen Vorlage:** Die Knöpfe „Einstellungen sichern“ und „Einstellungen zurückspielen“ arbeiten jetzt mit demselben Sicherungsmodul (1.2.2) wie die übrigen Plugins dieser Reihe.
+  - Das Kennzeichen `beschattungswaechter` steht seit 0.9.11 im Kopf jeder Sicherung, wurde aber bis 0.9.40 nicht gelesen. Jetzt wird eine Datei eines anderen Plugins und eine Datei ohne Kennzeichen als Ganzes abgewiesen. Sicherungen aus 0.9.10 hatten keinen Kopf; sie wurden schon bisher abgewiesen.
+  - Eine Einstellung, die diese Fassung nicht kennt, wird nicht übernommen und mit ihrem Namen gemeldet, nie mit ihrem Wert – oben in der Datei und in den Blöcken der Sprachansagen. Die übrigen Einstellungen werden zurückgespielt. Bisher wies ein unbekannter Name die ganze Datei ab.
+  - Ein leerer Wert in der Sicherung überschreibt keinen bestehenden; der bisherige Wert bleibt, und die Meldung nennt den Namen. Bisher galt das nur für das Merkwort.
+  - Fehlt einer Sicherung eine Einstellung, die ihre Fassung noch nicht kannte, behält diese ihren geltenden Wert, und die Meldung nennt sie. Bisher galt für die Wetter- und Sonnenstand-Einstellungen (`wetter_ein`, `wetter_token`, `sonne_min`, `wind_max`, `sonne_ein`, `fassade` … `fassade6`) die Vorgabe, und die Sprachansagen behielten ihren Wert ohne Meldung.
+- **Verhalten geändert – Zurückspielen nur mit Haken:** Zwischen dem Feld für die Sicherungsdatei und dem Knopf „Einstellungen zurückspielen“ steht ein Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“, ab Werk aus. Ohne ihn wird die Datei nicht gelesen und nichts geändert, und die Meldung sagt es. Haken, Text und die Prüfung der hochgeladenen Datei (über das Formular gekommen, höchstens 256 KB) kommen aus dem gemeinsamen Sicherungsmodul und sind in allen Plugins dieser Reihe gleich.
+- Unverändert: Eine Datei mit einem unzulässigen Wert ändert gar nichts, alle Beanstandungen werden genannt. Das Merkwort und das Wortzeichen der Ecowitt-Weiche gehören in die Datei, die Sprechtoken nicht; eine Datei mit Sprechtoken wird abgewiesen. Die Zweitschrift zieht mit, eine geänderte Verbindung zum Miniserver steht im Protokoll, MQTT und die Befehlsbrücke folgen der zurückgespielten Einstellung, und die Meldung sagt, wann der Wächter mit den zurückgespielten Einstellungen arbeitet.
+- Berichtigt: Der Reiter *Einbindung in Loxone* sagte, das MQTT-Gateway lege die Virtuellen Eingänge selbst an. Das ist nicht gemessen; der Text sagt jetzt, dass man sie in Loxone Config mit genau dem Namen aus der Tabelle anlegt.
+- Am Gerät nicht gemessen. Gemessen wurde mit einem Prüfstand unter PHP 7.4 und 8.4 auf dem Arbeitsrechner, der über einen Webserver die echten Knöpfe drückt, mit den Sicherungen aller Vorfassungen von 0.9.10 bis 0.9.40.
 
 ## Neu in 0.9.40
 
@@ -353,11 +365,15 @@ gelb am Knopf, und die Sicherung trägt den Kopf `_warnung` mit den Namen – ni
 den Werten. Geliefert wird sie trotzdem, für diese Einstellung mit der Vorgabe,
 mit der das Plugin gerade arbeitet.
 
-Eine Sicherung aus einer Fassung ohne die Wetter-Einstellungen oder ohne den
-Sonnenstand wird angenommen; für `wetter_ein`, `wetter_token`, `sonne_min`,
-`wind_max`, `sonne_ein` und `fassade` … `fassade6` gilt dann die Vorgabe (Wetter
-und Sonnenstand aus), und die Meldung sagt es. Jeder andere fehlende Schlüssel
-bleibt eine Beanstandung.
+Seit 0.9.41 laufen beide Knöpfe über das gemeinsame Sicherungsmodul, das alle
+Plugins dieser Reihe gleich behandeln. Zurückgespielt wird nur mit gesetztem
+Haken vor dem Knopf und nur eine Datei mit dem Kennzeichen `beschattungswaechter`
+im Kopf; eine Datei eines anderen Plugins oder ganz ohne Kopf (0.9.10) wird als
+Ganzes abgewiesen. Eine Einstellung, die diese Fassung nicht kennt, wird
+verworfen und mit Namen gemeldet. Fehlt eine Einstellung, die die Fassung der
+Sicherung noch nicht kannte (etwa Wetter, Sonnenstand, Sprachansagen, die
+Verbindung zum Miniserver), behält sie ihren geltenden Wert, und die Meldung
+nennt sie. Ein leerer Wert in der Datei überschreibt keinen bestehenden.
 
 **Beim Speichern im Reiter *Einstellungen* oder *MQTT*** gilt: wird ein Feld
 beanstandet, wird **nichts** gespeichert, auch nicht die übrigen Felder. Die eingetippten Werte stehen danach wieder im Formular, das
@@ -369,8 +385,8 @@ das Plugin dafür still die Vorgabe `beschattung` ein) und ein leerer Miniserver
 obwohl LoxBerry Miniserver kennt.
 
 Beim Zurückspielen gilt: eine halb gültige Datei ändert **gar nichts**.
-Unbekannte Schlüssel und unzulässige Werte werden benannt, alle auf einmal, und
-der bisherige Stand bleibt unangetastet.
+Unzulässige Werte werden benannt, alle auf einmal, und der bisherige Stand
+bleibt unangetastet.
 
 ## Der Rückweg: Loxone erfährt, ob der Wächter lebt
 

@@ -1,5 +1,9 @@
 <?php
 require_once __DIR__ . '/sprachausgabe.php';     // Stamm, fuer die Vorgaben der Sprachansagen schon beim ersten Lesen der Konfiguration
+/* Gemeinsames Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, seit 0.9.41): "Einstellungen
+ * sichern" und "Einstellungen zurueckspielen" verhalten sich in allen Plugins des Hauses gleich. Liegt neben
+ * dieser Datei und schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sicherung.php';
 /**
  * Beschattungswaechter - gemeinsamer Unterbau
  *
@@ -310,9 +314,11 @@ function bw_vorgaben()
 /**
  * Schluessel, die eine Sicherung aus einer frueheren Fassung noch nicht
  * kennt (Wetter-1, Verbesserungsbau 30.09.2026). Fehlen sie in der Datei,
- * gilt ihre Vorgabe (ab Werk aus), und die Meldung sagt es - jeder andere
- * fehlende Schluessel bleibt eine Beanstandung. Fuer die Schluessel aus
- * bw_sicherung_geltend() gilt statt der Vorgabe der GELTENDE Wert (Gruppe 23).
+ * behalten sie seit 0.9.41 ihren GELTENDEN Wert, und die Meldung nennt sie
+ * (gemeinsames Sicherungsmodul, 'fehlt' => 'behalten' in
+ * bw_sicherung_beschreibung(); Entscheidung des Hausherrn 12.11.2026 "Ja,
+ * behalten"). Bis 0.9.40 galt fuer die Schluessel von Wetter-1 und Sonne-1 die
+ * Vorgabe, fuer die von Gruppe 23 und tls schon der geltende Wert.
  */
 function bw_sicherung_spaeter()
 {
@@ -321,7 +327,7 @@ function bw_sicherung_spaeter()
     return array('wetter_ein', 'wetter_token', 'sonne_min', 'wind_max',
                  'sonne_ein', 'fassade', 'fassade2', 'fassade3', 'fassade4', 'fassade5', 'fassade6',
                  'endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist',
-                 /* 0.9.40 (G2): die Verbindung zum Miniserver - mit dem GELTENDEN Wert (bw_sicherung_geltend()). */
+                 /* 0.9.40 (G2): die Verbindung zum Miniserver. */
                  'tls');
 }
 
@@ -419,7 +425,7 @@ function bw_wert_pruefen($schluessel, $wert)
                1234567890123456 eine gueltige Form, und in der Datei stand
                danach eine Zahl - fuer bw_hat_inhalt() kein Merkwort.
                Leer heisst "abgeschaltet" (in einer Sicherung: "keins
-               gesichert", siehe bw_sicherung_lesen()). Sonst jede Form, die
+               gesichert", Regel 3 des Sicherungsmoduls). Sonst jede Form, die
                ohne Kodierung in eine Adresse passt (Regeln/05, "Das
                Positivmuster fuer ein Token wird so weit gefasst, wie Token
                wirklich aussehen"): gemessen am 30.09.2026 an 1023 Token der
@@ -1468,61 +1474,147 @@ function bw_fassung_db()
 }
 
 /**
- * Die Sicherungsdatei bauen.
+ * 0.9.41: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul
+ * (Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn 12.11.2026). Lesen,
+ * Pruefen und Zurueckspielen macht das Modul; bis 0.9.40 stand hier eine eigene
+ * Schleife (bw_sicherung_lesen()): ein unbekannter Schluessel oben wies die ganze
+ * Datei ab, einer in einem Block der Sprachansagen ebenso, ohne ihn zu nennen; ein
+ * leerer Wert ueberschrieb den bestehenden (ausser beim Merkwort), und das
+ * Kennzeichen _plugin wurde geschrieben, aber nie gelesen - eine fremde Datei oder
+ * eine ohne Kennzeichen wurde gelesen wie eine eigene (gemessen 14.11.2026 an
+ * 0.9.40 mit Werkzeuge/sicherung_pruefstand.py --profil ist).
  *
- * VOLLSTAENDIG, aus den Vorgaben heraus: geschrieben werden ALLE Schluessel,
- * nicht nur die abweichenden. Ein Schluessel, der in der Sicherung fehlt,
- * kaeme beim Zurueckspielen aus der Vorgabe - und das ist genau dann falsch,
- * wenn der Anwender ihn bewusst auf den Vorgabewert gesetzt hatte und sich
- * die Vorgabe spaeter aendert.
+ * Seither: das Kennzeichen 'beschattungswaechter' (seit 0.9.11 im Kopf jeder
+ * Sicherung) bleibt und wird geprueft; eine Datei mit fremdem oder ohne
+ * Kennzeichen wird abgewiesen (0.9.10 schrieb keinen Kopf); unbekannte Schluessel
+ * oben und in den Bloecken der Sprachansagen werden verworfen und mit Namen
+ * gemeldet; ein leerer Wert ueberschreibt keinen bestehenden. Was eine fruehere
+ * Fassung nicht kannte (bw_sicherung_spaeter() und die Sprachansagen), behaelt den
+ * geltenden Wert und wird genannt - bis 0.9.40 galt fuer die Schluessel von
+ * Wetter-1 und Sonne-1 die Vorgabe, und die Sprachansagen behielten den geltenden
+ * Wert still (Entscheidung des Hausherrn 12.11.2026 "Ja, behalten").
  *
- * DER LESBARE KOPF steht davor. Wer die Datei in einem Jahr findet, muss
- * erkennen koennen, was sie ist. Die Schluessel beginnen mit einem
- * Unterstrich, und bw_sicherung_lesen() UEBERGEHT sie - sonst lehnte diese
- * Linie genau die Datei ab, die sie zwei Zeilen vorher erzeugt hat.
+ * Wie bisher: jeder Wert geht durch bw_wert_pruefen() (dieselbe Positivliste wie
+ * das Formular und bw_config()), Leerraum am Rand eines Textes wird abgeschnitten;
+ * eine halb gueltige Datei aendert nichts, alle Beanstandungen werden gesammelt;
+ * das Wortzeichen der Ecowitt-Weiche erscheint in keiner Meldung, nur seine Laenge;
+ * eine Datei mit Sprechtoken wird abgewiesen, die geltenden Sprechtoken bleiben;
+ * die Vermerke ansage_token_herkunft und ansage_aus_datei kommen nie aus einer
+ * Datei und behalten ihren geltenden Wert ('nie_aus_datei', Modul 1.2.1). Das
+ * Kennwort des Miniservers steht weiterhin NICHT in der Sicherung: es liegt in der
+ * zentralen LoxBerry-Konfiguration.
+ */
+function bw_sicherung_beschreibung()
+{
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    $schluessel = array(
+        'tts' => sicherung_block($tts, array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))
+                                                        + array('fehlt' => 'behalten')))
+                 + array(
+                     'sichern' => 'ansage_sicherung_bereinigen',
+                     'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                         /* Eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei eines, wird
+                          * sie abgewiesen. Gemessen am Block der DATEI, denn Regel 3 des Moduls setzt ein leeres
+                          * Feld vorher auf den geltenden Wert. */
+                         if (ansage_sicherung_mangel($roh) || bw_ansage_wert('tts', ansage_sicherung_bereinigen($w)) !== true) {
+                             return bw_t('ANSAGEPLUGIN.M_FEHL');
+                         }
+                         return '';
+                     },
+                     'wandeln' => function ($w) {
+                         $g = '';
+                         return ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, bw_ansage_modi());
+                     }),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())),
+        'ansage_haken' => sicherung_block(array('stoerung')),
+    );
+    /* Wie bis 0.9.40: Leerraum am Rand eines Textes wird abgeschnitten (bw_wert_pruefen() prueft den
+     * abgeschnittenen Text). */
+    $rand = function ($w) { return is_string($w) ? trim($w) : $w; };
+    foreach (array_keys(bw_vorgaben()) as $k) {
+        if (!isset($schluessel[$k])) { $schluessel[$k] = array('wandeln' => $rand); }
+    }
+    foreach (array_merge(bw_sicherung_spaeter(), array('tts', 'ansage_regeln', 'ansage_haken', 'ansage_fruehestens')) as $s) {
+        $schluessel[$s]['fehlt'] = 'behalten';
+    }
+    return array(
+        'kennzeichen' => 'beschattungswaechter',
+        'hinweis' => 'Sicherung der Einstellungen des LoxBerry-Plugins Beschattungswaechter. '
+                   . 'Zum Zurueckspielen im Reiter Einstellungen. ACHTUNG: die Datei '
+                   . 'enthaelt das MERKWORT des unangemeldeten Endpunkts (aktionstoken) '
+                   . 'und ist damit vertraulich - wer sie hat, kann Befehle an den '
+                   . 'Miniserver ausloesen. Das Kennwort des Miniservers steht NICHT '
+                   . 'darin: es liegt in der zentralen LoxBerry-Konfiguration. Ist ein '
+                   . 'Wortzeichen der Ecowitt-Weiche eingetragen (wetter_token), steht '
+                   . 'auch dieses darin.',
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. der plugin.cfg (bw_fassung(), seit 0.9.16) -
+         * keine fuenfte Stelle neben den vier, die Werkzeuge/fassung_setzen.py pflegt. */
+        'fassung' => 'bw_fassung',
+        'vorgaben' => bw_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft', 'ansage_aus_datei'),
+        'pruefen' => function ($k, $w) {
+            if (bw_wert_pruefen($k, $w)) { return ''; }
+            /* Das Wortzeichen der Weiche erscheint nie in einer Meldung, nur seine Laenge (Wetter-1). */
+            return sprintf(bw_t('TEXT.SICH_WERT'), bw_e($k),
+                bw_e(($k === 'wetter_token' && is_string($w))
+                     ? sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($w)) : bw_kurz($w)));
+        },
+        'warnung' => function ($cfg) {
+            /* X-3 (Verbesserungsbau 30.09.2026): steht in der gespeicherten Konfiguration ein Wert, den das eigene
+             * Zurueckspielen abweisen wuerde, sagt es der Kopf _warnung - nur die Namen. Geliefert wird die
+             * Sicherung trotzdem vollstaendig; fuer diese Schluessel traegt sie die Vorgabe, mit der das Plugin
+             * gerade arbeitet (bw_config()). */
+            $warn = bw_rueckspiel_altwerte();
+            return $warn ? array('Gespeicherte Werte, die das Zurueckspielen abweisen wuerde: '
+                                 . implode(', ', $warn) . '. In dieser Sicherung steht dafuer die '
+                                 . 'Vorgabe, mit der das Plugin gerade arbeitet.') : array();
+        },
+        'vorbereiten' => 'bw_sicherung_vorbereiten',
+        'jetzt' => 'bw_ansage_cfg',
+        't' => 'bw_t',
+    );
+}
+
+/**
+ * 0.9.41: Vor dem Speichern (Rueckruf 'vorbereiten' des Moduls). Der Block tts
+ * wird wie bis 0.9.40 vervollstaendigt, und die geltenden Sprechtoken bleiben
+ * (die Sicherung traegt keine). Kam der Block nicht aus der Datei, steht dort
+ * schon der geltende. Die Vermerke ansage_token_herkunft und ansage_aus_datei
+ * behalten ihren geltenden Wert ('nie_aus_datei', Modul 1.2.1); der geltende
+ * Stand kommt aus bw_ansage_cfg() ('jetzt'), die eine liegengebliebene
+ * ansage.json aus der Probe vom 01.11. vorher einmal uebernimmt und
+ * ansage_aus_datei dabei auf 1 setzt.
+ */
+function bw_sicherung_vorbereiten($neu, $jetzt, $r)
+{
+    if (!in_array('tts', $r['fehlt_behalten'], true) && isset($neu['tts']) && is_array($neu['tts'])) {
+        $jt = (is_array($jetzt) && isset($jetzt['tts']) && is_array($jetzt['tts'])) ? $jetzt['tts'] : array();
+        list($tv) = ansage_vervollstaendigen($neu['tts'], 'aus');
+        $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
+    }
+    return $neu;
+}
+
+/**
+ * Die Sicherungsdatei - lesbarer Kopf (_hinweis, _plugin, _fassung, _stand, bei
+ * Bedarf _warnung) und ALLE Schluessel der Vorgaben aus bw_config(), auch die,
+ * die gerade auf ihrem Vorgabewert stehen; gebaut vom gemeinsamen
+ * Sicherungsmodul (sicherung_bauen()). Ein Schluessel, der in der Sicherung
+ * fehlte, kaeme beim Zurueckspielen nicht aus der Datei - das ist genau dann
+ * falsch, wenn der Anwender ihn bewusst auf den Vorgabewert gesetzt hatte.
  *
  * ZUM AKTIONSTOKEN: die Datei traegt es, und sie soll es tragen. Wer eine
  * Sicherung zurueckspielt, will den Waechter wieder so vorfinden, wie er war -
  * und dazu gehoert das Merkwort, denn ohne dasselbe Merkwort zeigen alle
- * Adressen in der Loxone-Projektdatei ins Leere.
- *
- * DAMIT IST DIE DATEI EIN GEHEIMNIS. Der Kopf sagt es, der Hinweis am Knopf
- * sagt es, und beide sagen dasselbe. Bis 0.9.12 stand hier das Gegenteil -
- * ein Satz aus der 0.9.10, die tatsaechlich noch keinen Endpunkt hatte. Wer
- * ihm folgte, gab mit einer als harmlos angekuendigten Datei die
- * Schluesselgewalt ueber aktion=jetzt weiter.
- *
- * Das Kennwort des Miniservers steht weiterhin NICHT darin: es liegt in der
- * zentralen LoxBerry-Konfiguration und wird von diesem Plugin weder
- * angezeigt noch gespeichert.
+ * Adressen in der Loxone-Projektdatei ins Leere. DAMIT IST DIE DATEI EIN
+ * GEHEIMNIS; der Kopf sagt es, der Hinweis am Knopf sagt es. Nie ein
+ * Sprechtoken, nie die Vermerke. Rueckgabe: das Feld (index.php macht mit
+ * sicherung_json() die Datei daraus).
  */
 function bw_sicherung_bauen()
 {
-    $kopf = array(
-        '_hinweis' => 'Sicherung der Einstellungen des LoxBerry-Plugins Beschattungswaechter. '
-                    . 'Zum Zurueckspielen im Reiter Einstellungen. ACHTUNG: die Datei '
-                    . 'enthaelt das MERKWORT des unangemeldeten Endpunkts (aktionstoken) '
-                    . 'und ist damit vertraulich - wer sie hat, kann Befehle an den '
-                    . 'Miniserver ausloesen. Das Kennwort des Miniservers steht NICHT '
-                    . 'darin: es liegt in der zentralen LoxBerry-Konfiguration. Ist ein '
-                    . 'Wortzeichen der Ecowitt-Weiche eingetragen (wetter_token), steht '
-                    . 'auch dieses darin.',
-        '_plugin'  => 'beschattungswaechter',
-        '_fassung' => bw_fassung(),
-        '_stand'   => date('Y-m-d H:i:s'),
-    );
-    /* X-3 (Verbesserungsbau 30.09.2026): steht in der Konfiguration ein Wert,
-       den das eigene Zurueckspielen abweisen wuerde, sagt der Kopf es - nur
-       die Namen. Geliefert wird die Sicherung trotzdem vollstaendig; fuer
-       diese Schluessel traegt sie die Vorgabe, mit der das Plugin gerade
-       arbeitet (bw_config()). */
-    $warn = bw_rueckspiel_altwerte();
-    if ($warn) {
-        $kopf['_warnung'] = 'Gespeicherte Werte, die das Zurueckspielen abweisen wuerde: '
-                          . implode(', ', $warn) . '. In dieser Sicherung steht dafuer die '
-                          . 'Vorgabe, mit der das Plugin gerade arbeitet.';
-    }
-    return array_merge($kopf, bw_ansage_fuer_sicherung(bw_config()));     // 0.9.34: nie ein Sprechtoken
+    return sicherung_bauen(bw_sicherung_beschreibung(), bw_config());
 }
 
 /**
@@ -1531,9 +1623,10 @@ function bw_sicherung_bauen()
  * Die Konfigurationsdatei wird roh gelesen - bw_config() setzt fuer einen
  * unzulaessigen Wert still die Vorgabe ein, und dann saehe man ihn hier nie.
  * Fehlende Schluessel kommen aus den Vorgaben (die ergaenzt bw_config() beim
- * naechsten Lesen ohnehin). Das Ergebnis geht durch bw_sicherung_lesen() -
- * DIESELBE Funktion wie das Zurueckspielen, keine zweite Liste. Rueckgabe:
- * die Namen, sortiert; leer, wenn alles bestuende oder keine Datei da ist.
+ * naechsten Lesen ohnehin). Seit 0.9.41 geht das Ergebnis durch dieselbe
+ * Pruefung wie das Zurueckspielen ueber das Sicherungsmodul
+ * (sicherung_selbstpruefung()), keine zweite Liste. Rueckgabe: die Namen,
+ * sortiert; leer, wenn alles bestuende oder keine Datei da ist.
  */
 function bw_rueckspiel_altwerte()
 {
@@ -1551,157 +1644,13 @@ function bw_rueckspiel_altwerte()
             $probe[$k] = $d[$k];
         }
     }
-    $js = json_encode($probe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-    if (!is_string($js)) {
-        return array();
-    }
-    $namen = array();
-    bw_sicherung_lesen($js, $namen);
-    $namen = array_values(array_unique($namen));
+    $b = bw_sicherung_beschreibung();
+    unset($b['warnung']);     // diese Funktion ist die Warnung - kein Kreislauf
+    $daten = sicherung_bauen($b, $probe);
+    unset($daten['_warnung']);
+    $namen = array_values(array_unique(sicherung_selbstpruefung($b, $daten, $probe)));
     sort($namen);
     return $namen;
-}
-
-/**
- * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
- *
- * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
- * halb gueltige Datei ueberschreibt GAR NICHTS. Wer eine Sicherung
- * zurueckspielt, will entweder den ganzen Stand oder gar keinen - eine zur
- * Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
- * sieht es ihr nicht an.
- *
- * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
- * stammen aus einer anderen Fassung oder einem anderen Plugin.
- *
- * Und seit 0.9.11 wird JEDER WERT geprueft, nicht nur der Schluessel. Eine
- * Datei, deren Schluessel alle bekannt sind, konnte das Plugin bis dahin
- * lautlos stilllegen: von="99:99" ergibt ein Zeitfenster, das nie offen ist.
- *
- * EINE SICHERUNG AUS 0.9.9 ODER 0.9.10 WIRD ABGELEHNT: sie kennt ms_nr und
- * aktionstoken noch nicht, und seit 0.9.16 ist eine unvollstaendige Datei
- * eine Beanstandung (Durchzug vom 07.09.2026; Entscheidung vom 11.09.2026:
- * "die Abweisung bleibt", Regeln/05). Bis 0.9.21 stand hier, alte Dateien
- * blieben lesbar und das geltende Merkwort bleibe stehen, wenn der Schluessel
- * fehlt - beides traf seit 0.9.16 nicht mehr zu, und der Zweig dafuer wurde
- * nie mehr erreicht (C7, Durchgang 30.09.2026; entfernt).
- *
- * DAS MERKWORT: ein LEERES in der Datei heisst "keins gesichert" - dann bleibt
- * das geltende stehen, und die Oberflaeche sagt es (C6). Eine Zahl statt einer
- * Zeichenkette wird abgewiesen (bw_wert_pruefen()).
- *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
- *                  Hinweise[]).
- * Die Hinweise sind KEINE Beanstandungen: sie verhindern das Zurueckspielen
- * nicht, sie erklaeren es. Wer nur drei Werte abholt, bekommt weiter genau
- * das, was er bisher bekam.
- */
-function bw_sicherung_lesen($roh, &$namen = null)
-{
-    $roh = bw_ansage_sicherung_vor($roh);     // 0.9.34: Token und Vermerk bleiben die geltenden
-    /* $namen (X-3): die Schluessel, deren Wert oder Name abgewiesen wurde -
-       fuer bw_rueckspiel_altwerte(). Nur Namen, nie Werte. */
-    $namen = array();
-    $mangel = array();
-    $hinweise = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(bw_t('TEXT.SICH_KEIN_JSON')), 0, $hinweise);
-    }
-    $neu = bw_vorgaben();
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') {
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(bw_t('TEXT.SICH_FREMD'), bw_e($k));
-            $namen[] = $k;
-            continue;
-        }
-        if (!bw_wert_pruefen($k, $w)) {
-            /* Das Wortzeichen der Weiche erscheint nie in einer Meldung, nur
-               seine Laenge (Wetter-1). */
-            $mangel[] = sprintf(bw_t('TEXT.SICH_WERT'), bw_e($k),
-                bw_e(($k === 'wetter_token' && is_string($w))
-                     ? sprintf(bw_t('TEXT.GEHEIM_LAENGE'), strlen($w)) : bw_kurz($w)));
-            $namen[] = $k;
-            continue;
-        }
-        $neu[$k] = is_string($w) ? trim($w) : $w;
-        $anzahl++;
-    }
-    /* EIN LEERES MERKWORT HEISST "KEINS GESICHERT" (C6, Durchgang
-       30.09.2026). Bis 0.9.21 wurde es uebernommen - "23 Werte uebernommen",
-       und danach wies der Endpunkt jede Adresse in Loxone mit 403 ab
-       (gemessen, Pruefberichte code C6 und Oberflaeche O10). Jetzt bleibt das
-       geltende Merkwort stehen, und die Meldung sagt es. Gilt nur, wenn die
-       Datei den Schluessel traegt - ein fehlender ist weiter eine
-       Beanstandung (unten). */
-    if (array_key_exists('aktionstoken', $daten) && is_string($daten['aktionstoken'])
-            && trim($daten['aktionstoken']) === '') {
-        $bisher = bw_config(false);
-        $bisher = isset($bisher['aktionstoken']) ? trim((string) $bisher['aktionstoken']) : '';
-        $neu['aktionstoken'] = $bisher;
-        $hinweise[] = bw_t($bisher !== '' ? 'TEXT.SICH_TOKEN_BEHALTEN' : 'TEXT.SICH_TOKEN_KEINS');
-    }
-    if ($anzahl === 0) {
-        $mangel[] = bw_t('TEXT.SICH_LEER');
-    }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    $spaeter = array();
-    $geltend = array();
-    foreach (array_keys(bw_vorgaben()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
-            /* Ein Schluessel, den eine fruehere Fassung nicht kannte, darf
-               fehlen: dann gilt seine Vorgabe (Wetter-1 ab Werk aus). */
-            if (in_array($fk, bw_sicherung_spaeter(), true)) {
-                /* Gruppe 23 (N15, E-E14): fuer die vier Schluessel der 0.9.31 gilt der GELTENDE Wert, nicht die
-                   Vorgabe - sonst schaltete eine 0.9.30-Sicherung den HTTP-Lesezweig einer Bestandsanlage ab. */
-                if (in_array($fk, bw_sicherung_geltend(), true)) {
-                    $bw_gilt = bw_config(false);
-                    $neu[$fk] = $bw_gilt[$fk];
-                    $geltend[] = $fk;
-                } else {
-                    $spaeter[] = $fk;
-                }
-                continue;
-            }
-            $fehlend[] = $fk;
-        }
-    }
-    if ($spaeter) {
-        $hinweise[] = sprintf(bw_t('TEXT.SICH_SPAETER'),
-            htmlspecialchars(implode(', ', $spaeter), ENT_QUOTES, 'UTF-8'));
-    }
-    if ($geltend) {
-        $hinweise[] = sprintf(bw_t('TEXT.SICH_SPAETER_GELTEND'),
-            htmlspecialchars(implode(', ', $geltend), ENT_QUOTES, 'UTF-8'));
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(bw_t('TEXT.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
-    }
-    return array($mangel ? null : $neu, $mangel, $anzahl, $hinweise);
 }
 
 /**
@@ -3806,48 +3755,6 @@ function bw_ansage_wert($k, $w)
             return in_array($w, array(0, 1, '0', '1'), true);
     }
     return is_string($w) && (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w);
-}
-
-/** Fuer die Sicherung: nie ein Sprechtoken, nie der Herkunftsvermerk. Ausgabeart, Ziele, Regeln und Haken reisen mit. */
-function bw_ansage_fuer_sicherung(array $c)
-{
-    unset($c['ansage_token_herkunft'], $c['ansage_aus_datei']);
-    if (isset($c['tts']) && is_array($c['tts'])) { $c['tts'] = ansage_sicherung_bereinigen($c['tts']); }
-    return $c;
-}
-
-/**
- * Vor dem Zurueckspielen. Eine Datei mit Sprechtoken wird abgewiesen (der Block wird unbrauchbar gemacht, die Wertpruefung nennt ihn). Die geltenden Token und der Vermerk bleiben.
- * Fehlt ein Schluessel (Sicherung einer aelteren Fassung), gilt der geltende Wert: Ein bewusstes AUS geht beim Zurueckspielen nicht verloren.
- */
-function bw_ansage_sicherung_vor($roh)
-{
-    $d = json_decode((string) $roh, true);
-    if (!is_array($d)) { return $roh; }
-    $inhalt = false;
-    foreach (array_keys($d) as $k) { if ((string) $k !== '' && ((string) $k)[0] !== '_') { $inhalt = true; } }
-    if (!$inhalt) { return $roh; }
-    $j = bw_ansage_cfg();
-    unset($d['ansage_token_herkunft'], $d['ansage_aus_datei']);
-    $jt = isset($j['tts']) && is_array($j['tts']) ? $j['tts'] : array();
-    if (array_key_exists('tts', $d)) {
-        $g = '';
-        $p = is_array($d['tts']) ? ansage_wert_pruefen($d['tts'], $g, bw_ansage_modi()) : null;
-        if (ansage_sicherung_mangel($d['tts']) || $p === null) {
-            $d['tts'] = 'ABGEWIESEN';
-        } else {
-            list($tv) = ansage_vervollstaendigen($p, 'aus');
-            $d['tts'] = ansage_sicherung_tokens_behalten($tv, $jt);
-        }
-    } else {
-        $d['tts'] = bw_tts($j);
-    }
-    foreach (array_diff(bw_ansage_schluessel(), array('tts', 'ansage_token_herkunft', 'ansage_aus_datei')) as $k) {
-        if (!array_key_exists($k, $d) && array_key_exists($k, $j)) { $d[$k] = $j[$k]; }
-    }
-    $d['ansage_token_herkunft'] = isset($j['ansage_token_herkunft']) && is_array($j['ansage_token_herkunft']) ? $j['ansage_token_herkunft'] : array();
-    $d['ansage_aus_datei'] = 1;
-    return (string) json_encode($d);
 }
 
 /**
@@ -5984,19 +5891,6 @@ function bw_uebergang($d)
         }
     }
     return $u;
-}
-
-/**
- * Die Schluessel aus bw_sicherung_spaeter(), fuer die beim Zurueckspielen
- * einer aelteren Sicherung der GELTENDE Wert gilt, nicht die Vorgabe (N15,
- * E-E14): mit der Vorgabe schaltete eine 0.9.30-Sicherung den HTTP-Lesezweig
- * einer Bestandsanlage still ab (G18 N3, G19 N1, G21 N2).
- */
-function bw_sicherung_geltend()
-{
-    /* 0.9.40 (G2/G3): tls - eine Sicherung aus 0.9.39 und frueher kennt den Schluessel nicht; dann bleibt die
-       geltende Verbindung stehen (auch ein ausdruecklich gesetztes 0), statt still auf die Vorgabe zu springen. */
-    return array('endpunkt_ein', 'befehle_mqtt_ein', 'anwesend_ein', 'anwesend_frist', 'tls');
 }
 
 /** Warum bw_sperre() zuletzt false gab: 'belegt', 'rechte' - oder 'frei' nach Erfolg (B15/N10). */

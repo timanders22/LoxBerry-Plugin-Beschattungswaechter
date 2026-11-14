@@ -601,9 +601,8 @@ $bw_ms = bw_miniserver();
  * keinen Endpunkt hatte. Das Kennwort des Miniservers steht weiterhin nicht
  * darin; es liegt in der zentralen LoxBerry-Konfiguration. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_sichern'])) {
-    $bw_js = json_encode(bw_sicherung_bauen(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if (is_string($bw_js) && $bw_js !== '') {
+    $bw_js = sicherung_json(bw_sicherung_bauen());     // 0.9.41: Kopf und Inhalt baut das Sicherungsmodul
+    if ($bw_js !== '') {
         while (ob_get_level() > 0) { ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="beschattungswaechter_einstellungen_'
@@ -616,55 +615,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_sichern'])) {
 
 /* ---------------- Einstellungen zurueckspielen ----------------
  *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+ * 0.9.41: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang(), Modul 1.1.0,
+ * Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich: zuerst der Haken zurueck_ok (ohne
+ * ihn wird nichts gelesen und nichts geaendert), dann is_uploaded_file() (sonst liesse sich jede
+ * Datei des Servers unterschieben) und die Groessengrenze des Moduls; erst danach wird die Datei
+ * gelesen. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
-    if (!isset($_FILES['bw_sicherung']) || !is_array($_FILES['bw_sicherung'])
-        || !isset($_FILES['bw_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['bw_sicherung']['tmp_name'])) {
-        $bw_fehler[] = bw_t('TEXT.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['bw_sicherung']['size'] > 262144) {
-        $bw_fehler[] = bw_t('TEXT.SICH_ZU_GROSS');
+    list($bw_roh, $bw_ab) = sicherung_eingang(bw_sicherung_beschreibung(), $_POST, $_FILES, 'bw_sicherung');
+    if ($bw_ab !== null) {
+        $bw_sm = sicherung_meldungen(bw_sicherung_beschreibung(), $bw_ab);
+        foreach ($bw_sm['fehler'] as $bw_x) { $bw_fehler[] = $bw_x; }
     } else {
-        $bw_vorher = $bw_cfg;
-        list($bw_neu, $bw_mangel, $bw_n, $bw_shinweise) = bw_sicherung_lesen(
-            (string) @file_get_contents($_FILES['bw_sicherung']['tmp_name']));
-        if ($bw_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $bw_fehler[] = bw_t('TEXT.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $bw_mangel);
-        } elseif (bw_config_speichern($bw_neu)) {
-            $bw_meldungen[] = sprintf(bw_t('TEXT.SICH_UEBERNOMMEN'), $bw_n);
-            /* Was die Datei NICHT enthielt, gehoert in die Meldung. Eine
-               Zahl allein ("21 Werte uebernommen") verschweigt genau den
-               Fall, in dem der Bediener etwas wissen muss. */
-            foreach ($bw_shinweise as $bw_h) { $bw_meldungen[] = $bw_h; }
-            /* Die Felder darunter zeigen sonst weiter den alten Stand: der
-               Bediener sieht keine Aenderung und drueckt noch einmal. */
-            $bw_cfg = bw_config();
-            $bw_meldungen[] = bw_t('TEXT.SICH_DANACH');
-            /* 0.9.40 (G2): eine Sicherung kann die Verbindungsart aendern - wie beim Speichern protokollieren. */
-            $bw_tls_alt = array_key_exists('tls', $bw_vorher) ? $bw_vorher['tls'] : 'auto';
-            if ($bw_tls_alt !== $bw_cfg['tls']) {
-                bw_log('Verbindung zum Miniserver: tls=' . (string) $bw_cfg['tls'] . ' (vorher ' . (string) $bw_tls_alt
-                       . ', aus einer Sicherung).');
-                $bw_meldungen[] = bw_t('TEXT.TLS_GEAENDERT');
+        /* 0.9.41: das gemeinsame Sicherungsmodul (sicherung_zurueckspielen(), Beschreibung
+         * bw_sicherung_beschreibung()) liest, prueft, verwirft Unbekanntes mit Namen, laesst leere
+         * Werte den bisherigen stehen und aendert bei einer Beanstandung GAR NICHTS (alle
+         * Beanstandungen, nicht nur die erste). bw_config_speichern() schreibt Konfiguration und
+         * Zweitschrift; das Modul misst danach, ob sie inhaltsgleich sind. Danach wie bis 0.9.40: die
+         * Verbindungsart ins Protokoll, MQTT nach einer Aenderung von Schalter und Praefix (M1, M2, M4),
+         * die Befehlsbruecke (V1) - und die Meldung sagt, was mit dem Dienst geschieht. */
+        $bw_b = bw_sicherung_beschreibung();
+        $bw_b['speichern'] = function ($neu) { return bw_config_speichern($neu); };
+        $bw_b['zweitschrift'] = function () { $p = bw_paths(); return array($p['cfgdatei'], $p['sicherung']); };
+        $bw_b['nachziehen'] = function ($neu, $vorher, $r) use (&$bw_fehler) {
+            $h = array();
+            /* Ein LEERES Merkwort in der Datei heisst "keins gesichert" (C6): das geltende bleibt (Regel 3 des
+             * Moduls), und die Seite sagt, was das fuer die Adressen in Loxone heisst. */
+            if (trim((string) $neu['aktionstoken']) === '') {
+                $h[] = bw_t('TEXT.SICH_TOKEN_KEINS');
+            } elseif (in_array('aktionstoken', $r['leer_behalten'], true)) {
+                $h[] = bw_t('TEXT.SICH_TOKEN_BEHALTEN');
             }
-            /* Wie nach dem Speichern im Reiter MQTT (M1, M2, M4): eine
-               Sicherung kann Schalter und Praefix aendern. */
-            $bw_nach = bw_mqtt_nach_aenderung($bw_vorher, $bw_cfg);
-            $bw_meldungen = array_merge($bw_meldungen, $bw_nach['ok']);
-            $bw_fehler = array_merge($bw_fehler, $bw_nach['fehler']);
-            bw_mqtt_zustaende($bw_cfg, true);
+            $cfg = bw_config();
+            /* Der Dienst: der naechste Cron-Lauf arbeitet mit den neuen Einstellungen. */
+            $h[] = bw_t('TEXT.SICH_DANACH');
+            /* 0.9.40 (G2): eine Sicherung kann die Verbindungsart aendern - wie beim Speichern protokollieren. */
+            $tls_alt = (is_array($vorher) && array_key_exists('tls', $vorher)) ? $vorher['tls'] : 'auto';
+            if ($tls_alt !== $cfg['tls']) {
+                bw_log('Verbindung zum Miniserver: tls=' . (string) $cfg['tls'] . ' (vorher ' . (string) $tls_alt
+                       . ', aus einer Sicherung).');
+                $h[] = bw_t('TEXT.TLS_GEAENDERT');
+            }
+            /* Wie nach dem Speichern im Reiter MQTT (M1, M2, M4): eine Sicherung kann Schalter und Praefix
+             * aendern. */
+            $nach = bw_mqtt_nach_aenderung(is_array($vorher) ? $vorher : array(), $cfg);
+            $h = array_merge($h, $nach['ok']);
+            foreach ($nach['fehler'] as $x) { $bw_fehler[] = $x; }
+            bw_mqtt_zustaende($cfg, true);
             /* V1 (Gruppe 23): eine Sicherung kann den Haken der Befehlsbruecke aendern. */
-            list($bw_bm_ok, $bw_bm_f) = bw_bruecke_meldungen(bw_bruecke_schalten($bw_cfg));
-            $bw_meldungen = array_merge($bw_meldungen, $bw_bm_ok);
-            $bw_fehler = array_merge($bw_fehler, $bw_bm_f);
-        } else {
-            $bw_fehler[] = bw_t('TEXT.SICH_SCHREIBFEHLER');
-        }
+            list($bm_ok, $bm_f) = bw_bruecke_meldungen(bw_bruecke_schalten($cfg));
+            $h = array_merge($h, $bm_ok);
+            foreach ($bm_f as $x) { $bw_fehler[] = $x; }
+            return $h;
+        };
+        $bw_b['log'] = 'bw_log';
+        $bw_r = sicherung_zurueckspielen($bw_b, $bw_roh);
+        $bw_sm = sicherung_meldungen($bw_b, $bw_r);
+        foreach ($bw_sm['fehler'] as $bw_x) { $bw_fehler[] = $bw_x; }
+        foreach ($bw_sm['hinweise'] as $bw_x) { $bw_meldungen[] = $bw_x; }
+        /* Die Felder darunter zeigen sonst weiter den alten Stand: der Bediener sieht keine Aenderung und
+         * drueckt noch einmal. */
+        if ($bw_r['gespeichert']) { $bw_cfg = bw_config(); }
     }
 }
 
@@ -1146,6 +1156,7 @@ if ($bw_altwerte) { ?>
     <?php echo bw_fmt(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="file" name="bw_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(bw_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bw_zurueck" value="1"><?= bw_t('TEXT.K_ZURUECK') ?></button>
   </form>
 </div>
