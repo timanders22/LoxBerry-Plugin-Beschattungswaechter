@@ -1571,7 +1571,18 @@ function bw_sicherung_beschreibung()
                                  . 'Vorgabe, mit der das Plugin gerade arbeitet.') : array();
         },
         'vorbereiten' => 'bw_sicherung_vorbereiten',
-        'jetzt' => 'bw_ansage_cfg',
+        // 0.9.42 (Modul 1.2.9, Bauform vom 15.11.2026): das Modul sieht die geltende Konfiguration ungefiltert -
+        // bw_config() liefert nur die Vorgabenschluessel und weist einen Block tts mit unbekanntem Unterschluessel
+        // ganz ab (ansage_wert_pruefen()); was die Datei sonst traegt, oben und im Block tts, haengt hier an, damit
+        // das Zurueckspielen es beim Namen nennt, statt es still wegfallen zu lassen.
+        'jetzt' => function () {
+            $j = bw_ansage_cfg();
+            $q = bw_paths();
+            $w = is_file($q['cfgdatei']) ? json_decode((string) @file_get_contents($q['cfgdatei']), true) : null;
+            if (!is_array($w)) { $w = array(); }
+            if (isset($w['tts'], $j['tts']) && is_array($w['tts']) && is_array($j['tts'])) { $j['tts'] += $w['tts']; }
+            return $j + $w;
+        },
         't' => 'bw_t',
     );
 }
