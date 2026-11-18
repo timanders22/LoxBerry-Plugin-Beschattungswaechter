@@ -519,7 +519,7 @@ function bw_kurz($w)
 function bw_config_lage($setzen = null, $erste = false)
 {
     static $l = array('lage' => 'unbekannt', 'fehlend' => array(), 'verworfen' => array(),
-                      'war_kaputt' => false);
+                      'war_kaputt' => false, 'unbekannt' => array());
     /* DIE ERSTE LAGE DIESES PROZESSES wird gehalten (O4, Durchgang
        30.09.2026). Die Oberflaeche ruft bw_config() mehrmals; der erste
        Aufruf heilt eine beschaedigte Datei aus der Zweitschrift und schreibt
@@ -573,6 +573,30 @@ function bw_zweitschrift_mit_inhalt()
 }
 
 /**
+ * Frage 46 (Entscheidung des Hausherrn 18.11.2026). Diese Funktion steht wortgleich in sieben Linien:
+ * Abfahrtsassistent, Alexa-NG, AudiConnect, BYD-Autos, Beschattungswaechter, Skoda-Connect-NG und VolkswagenID.
+ * Ein unbekannter Unterschluessel im Block tts wird verworfen und mit Namen genannt, nie mit Wert; die uebrigen
+ * Eintraege bleiben samt Sprechtoken. Unbekannt heisst: die Pruefung der Linie ($pruefen, ein Eintrag allein,
+ * Rueckgabe der Grund oder '') nennt ihn mit TTS_EINTRAG. Ein bekannter Eintrag mit ungueltigem Wert bleibt stehen;
+ * ihn weist die Pruefung des ganzen Blocks ab, wie bisher. Bliebe nichts Bekanntes uebrig, bleibt der Block, wie er
+ * ist. Rueckgabe: array(Block, Liste der Namen 'tts.<eintrag>').
+ */
+function tts_unbekannte_verwerfen($tts, $pruefen)
+{
+    if (!is_array($tts)) { return array($tts, array()); }
+    $rest = $tts;
+    $namen = array();
+    foreach ($tts as $s => $w) {
+        $g = (string) call_user_func($pruefen, array($s => $w));
+        if (strpos($g, 'TTS_EINTRAG|') === 0) {
+            unset($rest[$s]);
+            $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|'));
+        }
+    }
+    return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+}
+
+/**
  * Die Konfiguration lesen.
  *
  * $erzeugen = false liest NUR. Der Schalter ist da, damit ein kuenftiger
@@ -597,6 +621,7 @@ function bw_config($erzeugen = true)
     $lage = 'neu';
     $fehlend = array();
     $verworfen = array();
+    $unbekannt = array();     // Frage 46: verworfene unbekannte Unterschluessel im Block tts, nur Namen
     $d = null;
     $war_kaputt = false;
     $bw_bz = array();
@@ -670,6 +695,16 @@ function bw_config($erzeugen = true)
            Geschrieben wird es unten, nach der Vervollstaendigung, und nur mit $erzeugen. */
         list($d, $bw_bz) = bw_befehl_uebergang($d);
         $bw_u = bw_uebergang($d);
+        /* Frage 46 (Entscheidung des Hausherrn 18.11.2026): ein unbekannter Unterschluessel im Block tts wird verworfen
+           und mit Namen genannt (bw_config_lage() 'unbekannt', Protokoll, Reiter Test); der Block bleibt samt
+           Sprechtoken. Bis 0.9.43 wies bw_wert_pruefen() den ganzen Block ab, es galt der Werksblock, und beim
+           Zurueckspielen waren die Sprechtoken leer. tts_unbekannte_verwerfen() steht wortgleich in sieben Linien. */
+        if (isset($d['tts']) && is_array($d['tts'])) {
+            list($d['tts'], $unbekannt) = tts_unbekannte_verwerfen($d['tts'], function ($t) {
+                $g = '';
+                return ansage_wert_pruefen($t, $g, bw_ansage_modi()) === null ? $g : '';
+            });
+        }
         foreach ($c as $k => $v) {
             if (!array_key_exists($k, $d)) {
                 if (array_key_exists($k, $bw_u)) {
@@ -708,7 +743,9 @@ function bw_config($erzeugen = true)
     foreach ($fehlend as $bw_k) {
         if ($bw_k !== 'aktionstoken') { $bw_zu_ergaenzen[] = $bw_k; }
     }
-    if ($erzeugen && $bw_zu_ergaenzen && !$verworfen
+    /* Frage 46: auch nicht bei einem verworfenen unbekannten Eintrag im Block tts - er bleibt in der Datei stehen, bis
+       jemand speichert, und wird bis dahin bei jedem Lesen genannt. */
+    if ($erzeugen && $bw_zu_ergaenzen && !$verworfen && !$unbekannt
             && $lage !== 'kaputt' && $lage !== 'neu') {
         $bw_schreib = $c;
         if (in_array('aktionstoken', $fehlend, true)) {
@@ -744,9 +781,15 @@ function bw_config($erzeugen = true)
             'In der Konfiguration stehen unzulaessige Werte; es gelten dafuer die '
             . 'Vorgaben: ' . implode(', ', $verworfen));
     }
+    if (in_array('tts', $verworfen, true)) { $unbekannt = array(); }     // Frage 46: der ganze Block ist verworfen und genannt
+    if ($unbekannt && $erzeugen) {
+        bw_log_wenn_neu('unbekannt',
+            'In der Konfiguration stehen unbekannte Eintraege; sie werden nicht gelesen, die uebrigen Einstellungen '
+            . 'ihres Blocks gelten weiter, beim naechsten Speichern fallen sie weg: ' . implode(', ', $unbekannt));
+    }
 
     bw_config_lage(array('lage' => $lage, 'fehlend' => $fehlend, 'verworfen' => $verworfen,
-                         'war_kaputt' => $war_kaputt));
+                         'war_kaputt' => $war_kaputt, 'unbekannt' => $unbekannt));
     return $c;
 }
 
@@ -1516,8 +1559,15 @@ function bw_sicherung_beschreibung()
                          /* Eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei eines, wird
                           * sie abgewiesen. Gemessen am Block der DATEI, denn Regel 3 des Moduls setzt ein leeres
                           * Feld vorher auf den geltenden Wert. */
-                         if (ansage_sicherung_mangel($roh) || bw_ansage_wert('tts', ansage_sicherung_bereinigen($w)) !== true) {
+                         if (ansage_sicherung_mangel($roh) || !is_array($w)) {
                              return bw_t('ANSAGEPLUGIN.M_FEHL');
+                         }
+                         /* Frage 47 (Entscheidung des Hausherrn 18.11.2026): ein bekannter Eintrag mit ungueltigem
+                          * Wert weist die ganze Datei ab, und die Meldung nennt den Eintrag mit Grund. Dieselbe
+                          * Pruefung wie bisher (bw_ansage_wert()); bis 0.9.43 stand hier nur M_FEHL ohne Namen. */
+                         $g = '';
+                         if (ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, bw_ansage_modi()) === null) {
+                             return sprintf(bw_t('TEXT.SICH_WERT'), 'tts', bw_e(ansage_kennung_text($g, bw_ansage_k())));
                          }
                          return '';
                      },

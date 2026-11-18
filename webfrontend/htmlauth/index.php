@@ -1799,6 +1799,11 @@ bw_zeile($bw_selbst, bw_t('TEXT.S_VOLL'),
                      . ($bw_lage['verworfen'] ? bw_t('TEXT.S_VERWORFEN') . ' ' . implode(', ', $bw_lage['verworfen']) : '')))
         : sprintf('%d/%d', $bw_alle, $bw_alle));
 }
+/* Frage 46 (18.11.2026): ein verworfener unbekannter Eintrag im Block tts - nur der Name, nie der Wert. */
+if (!empty($bw_lage['unbekannt'])) {
+    bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'), 0,
+        sprintf(bw_t('TEXT.CFG_EINTRAG_VERWORFEN'), implode(', ', $bw_lage['unbekannt'])));
+}
 
 /* VIER Stufen bis zur Wurzel: <ordner> -> plugins -> htmlauth ->
    webfrontend. Drei blieben bei webfrontend stehen und suchten darunter

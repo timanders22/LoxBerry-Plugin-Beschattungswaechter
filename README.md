@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.42
+Version 0.9.43
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,12 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.43
+
+- **Verhalten geändert – unbekannter Eintrag im Block der Sprachansagen:** Steht in den gespeicherten Einstellungen im Block `tts` ein Eintrag, den diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), wird nur dieser Eintrag verworfen und mit seinem Namen gemeldet (im Protokoll und im Reiter „Test“), nie mit seinem Wert. Die übrigen Einstellungen der Sprachansagen gelten weiter, und die hinterlegten Sprechtoken bleiben erhalten, auch beim Zurückspielen einer Sicherung. Bisher wurde in diesem Fall der ganze Block verworfen: Es galt die Werkseinstellung der Sprachansagen, und nach dem Zurückspielen waren die Sprechtoken leer. Beim nächsten Speichern fällt der unbekannte Eintrag aus der Datei weg. Ein ungültiger Wert eines bekannten Eintrags weist den Block weiterhin als Ganzes ab. Steht ein solcher Wert in einer Sicherungsdatei, wird die ganze Datei abgewiesen, die Einstellungen bleiben unverändert, und die Meldung nennt den Eintrag und den Grund; bisher stand dort nur „Die Sprachansagen ließen sich nicht speichern.“ Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4 an einer nachgestellten Konfiguration und Sicherung; am Gerät nicht gemessen.
+- **Einstellungen sichern und zurückspielen mit dem gemeinsamen Sicherungsmodul 1.2.11 statt 1.2.9:** Neu in 1.2.10 ist, dass ein leerer Wert auch in einem Teil der Sicherung, der nur aus einem einzelnen Wert besteht (etwa einem Zugangsschlüssel in einer eigenen Datei), einen gesetzten Wert nicht mehr überschreibt; er bleibt stehen und wird in der Meldung genannt. Dieses Plugin führt keinen solchen Teil; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4 (3 Vorfassungen zurückgespielt). Am Gerät nicht gemessen.
+- **Sicherungsmodul 1.2.11:** Wandelt ein Plugin beim Zurückspielen eine Sicherung aus einer Textdatei um, sagt die Meldung das jetzt mit einem gemeinsamen Satz, und Mängel darin werden in allen Plugins mit denselben Bezeichnungen genannt. Dieses Plugin wandelt keine Textdateien um; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4. Am Gerät nicht gemessen.
 
 ## Neu in 0.9.42
 
