@@ -572,28 +572,42 @@ function bw_zweitschrift_mit_inhalt()
     return bw_hat_inhalt($zs) ? $zs : null;
 }
 
-/**
- * Frage 46 (Entscheidung des Hausherrn 18.11.2026). Diese Funktion steht wortgleich in sieben Linien:
- * Abfahrtsassistent, Alexa-NG, AudiConnect, BYD-Autos, Beschattungswaechter, Skoda-Connect-NG und VolkswagenID.
- * Ein unbekannter Unterschluessel im Block tts wird verworfen und mit Namen genannt, nie mit Wert; die uebrigen
- * Eintraege bleiben samt Sprechtoken. Unbekannt heisst: die Pruefung der Linie ($pruefen, ein Eintrag allein,
- * Rueckgabe der Grund oder '') nennt ihn mit TTS_EINTRAG. Ein bekannter Eintrag mit ungueltigem Wert bleibt stehen;
- * ihn weist die Pruefung des ganzen Blocks ab, wie bisher. Bliebe nichts Bekanntes uebrig, bleibt der Block, wie er
- * ist. Rueckgabe: array(Block, Liste der Namen 'tts.<eintrag>').
- */
-function tts_unbekannte_verwerfen($tts, $pruefen)
+/* Fragen 55-59 (Entscheidung des Hausherrn 18.11.2026): unbekannte Eintraege im Block tts verwerfen, den Block pruefen
+ * und melden - mit dem Sprachmodul ab 1.4.4 (ansage_block_pruefen(), ansage_block_meldungen()). Bis dahin stand das
+ * Verwerfen wortgleich in sieben Linien. Frage 81: nach der Modulregel nur mit function_exists(); ist in diesem Prozess
+ * zuerst eine aeltere Abschrift geladen, wird nur der ganze Block geprueft (ohne Verwerfen, ohne die Saetze des Moduls). */
+
+/** Den Block tts pruefen; Rueckgabe in der Form von ansage_block_pruefen(). $pruefen: Pruefung der Linie fuer einen Teilblock. */
+function bw_tts_block_pruefen($tts, $pruefen = null)
 {
-    if (!is_array($tts)) { return array($tts, array()); }
-    $rest = $tts;
-    $namen = array();
-    foreach ($tts as $s => $w) {
-        $g = (string) call_user_func($pruefen, array($s => $w));
-        if (strpos($g, 'TTS_EINTRAG|') === 0) {
-            unset($rest[$s]);
-            $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|'));
+    if (function_exists('ansage_block_pruefen')) {
+        return ansage_block_pruefen($tts, bw_ansage_modi(), $pruefen);
+    }
+    $g = is_array($tts) ? '' : 'KEIN_FELD';
+    $p = null;
+    if (is_array($tts)) {
+        if ($pruefen !== null) {
+            $g = (string) call_user_func($pruefen, $tts);
+            $p = $g === '' ? $tts : null;
+        } else {
+            $p = ansage_wert_pruefen($tts, $g, bw_ansage_modi());
         }
     }
-    return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+    $b = null;
+    if ($p !== null) { list($b) = ansage_vervollstaendigen($p, 'aus'); }
+    return array('block' => $b, 'roh' => $p !== null ? $tts : null, 'verworfen' => array(),
+                 'ungueltig' => $p !== null ? array() : array('tts' => $g), 'grund' => $p !== null ? '' : $g);
+}
+
+/** Die Saetze zur Lage (Frage 59), unmaskiert: aus dem Sprachmodul; mit einer aelteren Abschrift nur die Namen. */
+function bw_tts_saetze(array $e, array $opt = array())
+{
+    if (function_exists('ansage_block_meldungen')) {
+        return ansage_block_meldungen($e, array('t' => function ($s) { return bw_t($s); }), $opt);
+    }
+    $n = array_merge(isset($e['verworfen']) && is_array($e['verworfen']) ? $e['verworfen'] : array(),
+                     isset($e['ungueltig']) && is_array($e['ungueltig']) ? array_keys($e['ungueltig']) : array());
+    return $n ? array('tts: ' . implode(', ', $n)) : array();
 }
 
 /**
@@ -622,6 +636,7 @@ function bw_config($erzeugen = true)
     $fehlend = array();
     $verworfen = array();
     $unbekannt = array();     // Frage 46: verworfene unbekannte Unterschluessel im Block tts, nur Namen
+    $bw_tts_lage = array();     // Frage 59: die Lage des Blocks tts (Form von ansage_block_pruefen())
     $d = null;
     $war_kaputt = false;
     $bw_bz = array();
@@ -698,12 +713,11 @@ function bw_config($erzeugen = true)
         /* Frage 46 (Entscheidung des Hausherrn 18.11.2026): ein unbekannter Unterschluessel im Block tts wird verworfen
            und mit Namen genannt (bw_config_lage() 'unbekannt', Protokoll, Reiter Test); der Block bleibt samt
            Sprechtoken. Bis 0.9.43 wies bw_wert_pruefen() den ganzen Block ab, es galt der Werksblock, und beim
-           Zurueckspielen waren die Sprechtoken leer. tts_unbekannte_verwerfen() steht wortgleich in sieben Linien. */
-        if (isset($d['tts']) && is_array($d['tts'])) {
-            list($d['tts'], $unbekannt) = tts_unbekannte_verwerfen($d['tts'], function ($t) {
-                $g = '';
-                return ansage_wert_pruefen($t, $g, bw_ansage_modi()) === null ? $g : '';
-            });
+           Zurueckspielen waren die Sprechtoken leer. Seit Sprachmodul 1.4.4 ueber bw_tts_block_pruefen() (Frage 55). */
+        if (array_key_exists('tts', $d)) {
+            $bw_tts_lage = bw_tts_block_pruefen($d['tts']);
+            $unbekannt = $bw_tts_lage['verworfen'];
+            if (is_array($bw_tts_lage['roh'])) { $d['tts'] = $bw_tts_lage['roh']; }
         }
         foreach ($c as $k => $v) {
             if (!array_key_exists($k, $d)) {
@@ -717,6 +731,9 @@ function bw_config($erzeugen = true)
                 $c[$k] = is_string($d[$k]) ? trim($d[$k]) : $d[$k];
             } else {
                 $verworfen[] = $k;
+                /* Frage 84 (Entscheidung des Hausherrn 18.11.2026): ein ungueltiger Block tts gilt als aus (Regel des
+                 * Sprachmoduls), nicht als Vorgabe - bis 0.9.43 galt dann der Werksblock. */
+                if ($k === 'tts') { $c['tts'] = ansage_block_oder_aus(null); }
             }
         }
     }
@@ -776,20 +793,24 @@ function bw_config($erzeugen = true)
      * und die Vorgabe daraufzuschreiben verdeckte den Fehler erst recht. */
     /* B22 (Gruppe 23): nur mit $erzeugen - bw_config(false) aus uninstall (als root), Healthcheck, Endpunkt und
        Bruecke schreibt keine Protokollzeile und legt keinen Merker an. */
-    if ($verworfen && $erzeugen) {
+    $bw_vw = array_values(array_diff($verworfen, array('tts')));     // Frage 84: tts gilt als aus, nicht als Vorgabe
+    if ($bw_vw && $erzeugen) {
         bw_log_wenn_neu('verworfen',
             'In der Konfiguration stehen unzulaessige Werte; es gelten dafuer die '
-            . 'Vorgaben: ' . implode(', ', $verworfen));
+            . 'Vorgaben: ' . implode(', ', $bw_vw));
+    }
+    if (in_array('tts', $verworfen, true) && $erzeugen) {
+        bw_log_wenn_neu('tts_ungueltig', implode(' ', bw_tts_saetze(array(
+            'ungueltig' => !empty($bw_tts_lage['ungueltig']) ? $bw_tts_lage['ungueltig'] : array('tts' => '')))));
     }
     if (in_array('tts', $verworfen, true)) { $unbekannt = array(); }     // Frage 46: der ganze Block ist verworfen und genannt
     if ($unbekannt && $erzeugen) {
-        bw_log_wenn_neu('unbekannt',
-            'In der Konfiguration stehen unbekannte Eintraege; sie werden nicht gelesen, die uebrigen Einstellungen '
-            . 'ihres Blocks gelten weiter, beim naechsten Speichern fallen sie weg: ' . implode(', ', $unbekannt));
+        /* Frage 59 (18.11.2026): der Satz des Sprachmoduls 1.4.4, in der Sprache der Oberflaeche. */
+        bw_log_wenn_neu('unbekannt', implode(' ', bw_tts_saetze(array('verworfen' => $unbekannt))));
     }
 
     bw_config_lage(array('lage' => $lage, 'fehlend' => $fehlend, 'verworfen' => $verworfen,
-                         'war_kaputt' => $war_kaputt, 'unbekannt' => $unbekannt));
+                         'war_kaputt' => $war_kaputt, 'unbekannt' => $unbekannt, 'tts_lage' => $bw_tts_lage));
     return $c;
 }
 
