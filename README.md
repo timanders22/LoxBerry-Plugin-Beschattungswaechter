@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.44
+Version 0.9.45
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,10 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.45
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.
 
 ## Neu in 0.9.44
 

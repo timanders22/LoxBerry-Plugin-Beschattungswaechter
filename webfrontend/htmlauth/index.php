@@ -726,7 +726,8 @@ $bw_eg = $bw_eingaben;
 
 if ($bw_rahmen) {
     /* B8 (Gruppe 23): die eigene Wikiseite (HTTP 200, angelegt 01.10.2026), wie Docker/Abfahrt/Ferien. */
-    LBWeb::lbheader(bw_t('ALLGEMEIN.TITEL'), 'https://wiki.loxberry.de/plugins/beschattungswaechter/start', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel(bw_t('ALLGEMEIN.TITEL'), __DIR__), 'https://wiki.loxberry.de/plugins/beschattungswaechter/start', 'help.html');
 }
 
 ?>
