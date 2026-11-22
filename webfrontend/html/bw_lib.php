@@ -4021,6 +4021,20 @@ function bw_ansage_regeln($cfg = null)
     return $p === null ? ansage_regeln_vorgaben() : $p;
 }
 
+/**
+ * 0.9.46 (Entscheidung des Hausherrn 22.11.2026, Sprachmodul 1.5.0): Gilt jetzt die Nachtruhe - mit den Regeln fuer heute? An Nicht-Schultagen endet
+ * sie spaeter (ansage_regeln_heute_lesen(): hoechstens eine kurze Sitzung am Broker, nur wenn es etwas aendern kann).
+ * Mit einem Sprachmodul vor 1.5.0 wie bisher ansage_nachtruhe(). $k wie bw_ansage_k(); $k['haus'] ersetzt die Sitzung.
+ */
+function bw_nachtruhe_heute(array $rg, $jetzt, array $k = array())
+{
+    $jetzt = (int) $jetzt;
+    if (ansage_nachtruhe($rg, $jetzt)) { return true; }
+    if (!function_exists('ansage_regeln_heute_lesen')) { return false; }
+    list($rh) = ansage_regeln_heute_lesen($rg, $k + array('jetzt' => function () use ($jetzt) { return $jetzt; }));
+    return ansage_nachtruhe($rh, $jetzt);
+}
+
 /** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
 function bw_ansage_warte($fn)
 {
@@ -4188,7 +4202,8 @@ function bw_ansage_takt($stufe, $jetzt = null)
         return 'entfaellt';
     }
     $ab = isset($cfg['ansage_fruehestens']) && is_string($cfg['ansage_fruehestens']) ? $cfg['ansage_fruehestens'] : '07:30';
-    if (ansage_nachtruhe(bw_ansage_regeln($cfg), $jetzt) || date('H:i', $jetzt) < $ab) { return 'wartet'; }
+    /* 0.9.46: die Nachtruhe mit den Regeln fuer heute; die Uhrzeit zuerst, dann fragt sie den Broker nur ab $ab. */
+    if (date('H:i', $jetzt) < $ab || bw_nachtruhe_heute(bw_ansage_regeln($cfg), $jetzt, bw_ansage_k())) { return 'wartet'; }
     @file_put_contents($f, '{}');
     bw_ansage_legen(array(array('schluessel' => 'stoerung', 'text' => bw_t('ANSAGEPLUGIN.SATZ_STOERUNG'))), $jetzt);
     return 'gelegt';
