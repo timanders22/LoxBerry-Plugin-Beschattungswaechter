@@ -1,6 +1,6 @@
 # LoxBerry-Plugin „Beschattungswächter“
 
-Version 0.9.46
+Version 0.9.47
 
 Drückt in einem einstellbaren Abstand das **A** — den Knopf, der in Loxone die
 Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
@@ -20,6 +20,13 @@ Sonnenstandsautomatik einschaltet und den sonst nur ein Mensch drücken kann.
 * Entscheidet **nicht**, ob beschattet wird. Das bleibt Sache der Loxone-Logik.
   Auf Wunsch (ab Werk aus) hält es den Befehl zurück, solange die
   **Ecowitt-Weiche** keine Sonne oder starken Wind meldet.
+
+## Neu in 0.9.47
+
+- **Themen-Präfix auf einem gemeinsamen Bereich (Entscheidung des Hausherrn 23.11.2026 „Nur gemeinsame Bereiche“):** Ein MQTT-Präfix, das einer der gemeinsamen Bereiche unter `haus/` ist oder darin beginnt (`haus/<bereich>` bzw. `haus/<bereich>/…` für abfahrt, abfuhr, alarm, ansage, anwesenheit, energie, fahrzeug, kalender, klima, pv, raumklima, sonne, speicher, strompreis, szene, tag, tuer, usv, wetter), weisen Speichern im Reiter *MQTT* und das Zurückspielen einer Sicherung jetzt mit Namen ab: Dort liefern die Plugins einander Zustände ohne eigenes Präfix. `haus` allein und andere Präfixe unter `haus/` (etwa `haus/fenster`) bleiben erlaubt; Groß und Klein zählen wie bei MQTT. Ist ein solches Präfix schon gespeichert, ändert sich am Betrieb nichts – das Plugin sendet weiter darunter, nennt es einmal im Protokoll, und der Reiter *Test* zeigt die Zeile „Liegt das Themen-Präfix außerhalb der gemeinsamen Bereiche unter haus/?“ rot. Liste und Texte kommen aus dem gemeinsamen Modul `haus_bereiche.php`.
+- **Gespeicherte Einstellungen, die beim Laden nicht gelten (Entscheidung des Hausherrn 23./24.11.2026, Regeln/05 „Lade-Beanstandungen“):** Ungültige Werte der Konfigurationsdatei wurden schon bisher verworfen und im Protokoll und im Reiter *Test* genannt. Ein gelber Kasten über den Reitern nennt jetzt jedes Feld mit gespeichertem und verwendetem Wert, die Selbstprüfung im Reiter *Test* zeigt die Zeile „Gelten die gespeicherten Einstellungen beim Laden so, wie sie gespeichert sind?“ rot, und das Protokoll nennt die Namen einmal je Änderung. Bis 0.9.46 schrieb das Vervollständigen fehlender Einstellungen die bereinigte Konfiguration in die Datei; jetzt schreibt es die gespeicherten Werte und die fehlenden Einstellungen. Speichern behält bei einem genannten Feld, das Sie nicht ändern, den gespeicherten Wert, und die angezeigten Werte übernimmt nur der Knopf „Angezeigte Werte übernehmen“ mit gesetztem Haken. Token und Zugangsdaten erscheinen in keiner Meldung mit ihrem Wert, das Protokoll nennt keinen Wert. Gemeinsames Sicherungsmodul 1.3.0.
+- **Merkwort in falscher Form und Vervollständigen (Entscheidung des Hausherrn 24.11.2026):** Ein gespeichertes Merkwort, das nicht die übliche Form hat, gilt jetzt weiter – der unangemeldete Endpunkt nimmt es an, und der gelbe Kasten, der Reiter *Test* und das Protokoll nennen es, ohne seinen Wert zu zeigen. Bis 0.9.46 wurde es verworfen, und jede Adresse im Miniserver bekam „kein Merkwort eingerichtet“. Fehlende Einstellungen werden jetzt auch dann ergänzt, wenn ein anderer gespeicherter Wert ungültig ist; der ungültige Wert bleibt dabei in der Datei stehen und wird weiter genannt.
+- **Statusmeldungen an SignalBot (Auftrag des Hausherrn 23.11.2026):** Im Reiter *Einstellungen* steht unter den Sprachansagen der neue Block „Meldungen an SignalBot“, ab Werk aus. Eingeschaltet schickt das Plugin dieselben Anlässe, die es ansagen kann – je Anlass eigener Haken, auch ohne eingerichtete Ansage – als Nachricht über MQTT an das Plugin SignalBot (Thema `haus/meldung/<ordner>`, nie retained; SignalBot ab 0.9.44 mit „Meldungen unter haus/meldung annehmen“ und diesem Ordner unter „Meldungen anderer Plugins annehmen von“). Dieselbe Meldung frühestens wieder nach der eingestellten Sperre (Vorgabe 60 Minuten), „wieder da“ nur nach einer gemeldeten Störung, höchstens 10 Nachrichten je Stunde, darüber eine Sammelzeile; die Nachtruhe stellt SignalBot. Ein Text, der wie ein Zugangsdatum aussieht, geht nicht hinaus. Der Knopf „Testmeldung senden“ prüft den Weg mit Quittung, die Zeile darunter nennt die letzte. Gemeinsames Modul `meldung.php`, Texte im Abschnitt `[SIGNALMELDUNG]`.
 
 ## Neu in 0.9.46
 

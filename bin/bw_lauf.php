@@ -109,7 +109,7 @@ if ($bw_hoeren) {
     exit(bw_sonne_hoeren($bw_hid));
 }
 
-$c = bw_config();
+$c = bw_dienst_pflege();     // 0.9.47: lesen (vervollstaendigt) und Lade-Beanstandungen einmal melden (Regeln/05)
 /* Die Abodatei des Gateways folgt dem Praefix (M4, Durchgang 30.09.2026). Der
    Installer legt bei jedem Einbau die mitgelieferte mit dem Vorgabepraefix
    ab; ein anderes Praefix steht damit erst nach diesem Lauf wieder darin.

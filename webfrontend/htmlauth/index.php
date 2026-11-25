@@ -325,6 +325,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
     if (is_string($bw_th_roh) && $bw_th === '') {
         $bw_fehler[] = sprintf(bw_t('MQTT.THEMA_LEER'), bw_e(bw_vorgaben()['mqtt_thema']));
         $bw_mq_beanstandet[] = 'mqtt_thema';
+    } elseif (is_string($bw_th_roh) && bw_wert_pruefen('mqtt_thema', $bw_th) && hb_bereich($bw_th) !== ''
+              && $bw_th !== trim((string) bw_config()['mqtt_thema'])) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 0.9.47 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $bw_fehler[] = sprintf(bw_t('HAUSBEREICH.FEHLER'), bw_e($bw_th), bw_e(hb_bereich($bw_th)));
+        $bw_mq_beanstandet[] = 'mqtt_thema';
     } elseif (is_string($bw_th_roh) && bw_wert_pruefen('mqtt_thema', $bw_th)) {
         $bw_neu['mqtt_thema'] = $bw_th;
     } else {
@@ -364,6 +372,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['speichern_mqtt'])) {
  * Eigenes Formular 'endpunkt' im Reiter Einbindung, Abschnitt "Bestehende Anlagen". Ab Werk aus, nach einem Update an.
  * jetzt/pruefen mit Merkwort wirken unabhaengig davon. */
 /* 0.9.34: Sprachansagen, eigenes Formular, eigene Datei. Die Testansage spricht immer. */
+/* 0.9.47: Testmeldung an SignalBot (Knopf unter den Sprachansagen) - wie die Testansage darunter. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['meld_test'])) {
+    list($bw_at, $bw_ag) = bw_meld_test();
+    if ($bw_at) { $bw_meldungen[] = bw_t('SIGNALMELDUNG.T_OK'); } else { $bw_fehler[] = $bw_ag; }
+    $bw_tab = 'tab-settings';
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ansage_test'])) {
     list($bw_at, $bw_ag) = bw_ansage_test();
     if ($bw_at) { $bw_meldungen[] = bw_t('ANSAGEPLUGIN.M_TEST_OK'); } else { $bw_fehler[] = bw_t('ANSAGEPLUGIN.M_TEST_FEHL') . ' ' . $bw_ag; }
@@ -634,7 +648,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
          * Verbindungsart ins Protokoll, MQTT nach einer Aenderung von Schalter und Praefix (M1, M2, M4),
          * die Befehlsbruecke (V1) - und die Meldung sagt, was mit dem Dienst geschieht. */
         $bw_b = bw_sicherung_beschreibung();
-        $bw_b['speichern'] = function ($neu) { return bw_config_speichern($neu); };
+        // 0.9.47: die Werte einer Sicherung sind ausdruecklich - kein "Dateiwert behalten" (Regeln/05)
+        $bw_b['speichern'] = function ($neu) { return bw_config_speichern($neu, true, false); };
         $bw_b['zweitschrift'] = function () { $p = bw_paths(); return array($p['cfgdatei'], $p['sicherung']); };
         $bw_b['nachziehen'] = function ($neu, $vorher, $r) use (&$bw_fehler) {
             $h = array();
@@ -692,6 +707,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bw_zurueck'])) {
  * und kommen hier nicht an. Laesst sich die Einmalmeldung nicht ablegen, wird
  * wie bisher direkt gezeichnet - lieber ein doppelter POST als eine
  * verschluckte Meldung. */
+/* 0.9.47: Lade-Beanstandungen - angezeigte Werte uebernehmen, nur mit Haken (Entscheidung des Hausherrn 24.11.2026,
+ * "Haken im gelben Kasten"); ohne ihn bleibt die Datei byte-gleich. Geschrieben ohne "Dateiwert behalten". Der
+ * Wachposten weiter oben hat $_POST bei fremdem Merkmal schon geleert. */
+if (sicherung_lade_eingang($_POST) !== '') {
+    $bw_ladeb = bw_lade_b(true);
+    if (sicherung_lade_eingang($_POST) !== 'ja') {
+        $bw_fehler[] = bw_e(sicherung_t('K_LADE_HAKEN_FEHLT', $bw_ladeb));
+    } else {
+        $bw_ld = bw_lade_roh();
+        $bw_lv = bw_config(false);
+        $bw_un = array();
+        if ($bw_ld !== null) {
+            list($bw_lneu, $bw_un) = sicherung_lade_uebernehmen_stand($bw_ld, $bw_lv, sicherung_lade_beanstandungen($bw_ladeb, $bw_ld, $bw_lv));
+            if ($bw_un && !bw_config_speichern($bw_lneu, true, false)) {
+                $bw_fehler[] = bw_e(sicherung_t('K_SCHREIBFEHLER', $bw_ladeb));
+                $bw_un = array();
+            }
+        }
+        if ($bw_un) {
+            bw_log('Lade-Beanstandungen: angezeigte Werte uebernommen: ' . implode(', ', array_map('sicherung_name', $bw_un)));
+            $bw_meldungen[] = sprintf(sicherung_t('K_LADE_UEBERNOMMEN', $bw_ladeb), bw_e(implode(', ', $bw_un)));
+        }
+    }
+}
 if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (bw_einmal_schreiben(array('meldungen' => array_values($bw_meldungen),
                                   'fehler' => array_values($bw_fehler),
@@ -850,6 +889,11 @@ if ($bw_rahmen) {
    von hausstandard_pruefen.py nicht gesehen. */
 foreach ($bw_meldungen as $bw_m) { echo '<div class="sm-hinweis">' . $bw_m . '</div>'; }
 foreach ($bw_fehler as $bw_fm)   { echo '<div class="sm-fehler">' . $bw_fm . '</div>'; }
+/* 0.9.47: Lade-Beanstandungen (Regeln/05) - gelber Kasten; einmal je Aenderung ins Protokoll. */
+$bw_lade = bw_lade_beanstandungen();
+bw_lade_melden($bw_lade);
+echo sicherung_lade_kasten(bw_lade_b(true), isset($bw_lade) ? $bw_lade : bw_lade_beanstandungen(),
+    bw_fmt() . '<input data-role="none" type="hidden" name="activetab" value="' . bw_e($bw_tab) . '">');
 /* O2, Durchgang 30.09.2026: der eingestellte Miniserver fehlt in der
    LoxBerry-Konfiguration. Das steht oben, nicht nur im Protokoll. */
 $bw_ms_nr = trim((string) $bw_cfg['ms_nr']);
@@ -1809,6 +1853,12 @@ $bw_tm = bw_tts_saetze(array(
 if ($bw_tm) {
     bw_zeile($bw_selbst, bw_t('TEXT.S_KONFIG'), 0, implode(' ', $bw_tm));
 }
+/* 0.9.47: Lade-Beanstandungen (Regeln/05, Sicherungsmodul 1.3.0) - rot, solange ein gespeicherter Wert beim Laden nicht so
+ * gilt, wie er gespeichert ist (die verworfenen nennt S_VOLL oben schon). */
+$bw_ladeb = bw_lade_b(false);
+$bw_la = bw_lade_beanstandungen(null, false);
+bw_zeile($bw_selbst, sicherung_t('K_LADE_FRAGE', $bw_ladeb), $bw_la ? 0 : 1,
+    $bw_la ? implode(' ', sicherung_lade_saetze($bw_ladeb, $bw_la)) : sicherung_t('K_LADE_KEINE', $bw_ladeb));
 
 /* VIER Stufen bis zur Wurzel: <ordner> -> plugins -> htmlauth ->
    webfrontend. Drei blieben bei webfrontend stehen und suchten darunter
@@ -1942,6 +1992,10 @@ if (empty($bw_cfg['mqtt_ein'])) {
    Noncached? Liest config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT ein Strich. */
 list($bw_v2s, $bw_v2t) = bw_v2_haken_lage($bw_cfg);
 bw_zeile($bw_selbst, bw_t('TEXT.S_V2_HAKEN'), $bw_v2s, $bw_v2t);
+
+/* 0.9.47: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)? */
+$bw_hb = bw_pruef_praefix_haus($bw_cfg);
+bw_zeile($bw_selbst, bw_t('HAUSBEREICH.F_TEST'), $bw_hb[0] === -1 ? 2 : $bw_hb[0], $bw_hb[1]);
 
 /* Die Wetterquelle (Wetter-1, ab Werk aus). Im Reiter Test ein ECHTER
    Abruf ueber 127.0.0.1 - nur, wenn er serverseitig offen ist (wie der
